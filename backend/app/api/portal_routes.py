@@ -1,11 +1,12 @@
 """Signed-in overviews: my exercises and the approved-knowledge library."""
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.deps import current_user, handoff_role
 from app.db import tx
+from app.knowledge.service import library_versions
 from app.models import (
     Analysis,
     AppUser,
@@ -84,24 +85,6 @@ def my_exercises(session: Session = Depends(tx), user: AppUser = Depends(current
 def library(session: Session = Depends(tx)) -> list:
     """The newest approved version of every confirmed finding. Readable by everyone signed in;
     obsolete (retired) knowledge is left out."""
-    newest = (
-        select(KnowledgeVersion.finding_id, func.max(KnowledgeVersion.version_no).label("n"))
-        .group_by(KnowledgeVersion.finding_id)
-        .subquery()
-    )
-    rows = session.execute(
-        select(KnowledgeVersion, Finding, Handoff)
-        .join(
-            newest,
-            (KnowledgeVersion.finding_id == newest.c.finding_id)
-            & (KnowledgeVersion.version_no == newest.c.n),
-        )
-        .join(Finding, KnowledgeVersion.finding_id == Finding.id)
-        .join(Analysis, Finding.analysis_id == Analysis.id)
-        .join(Handoff, Analysis.handoff_id == Handoff.id)
-        .where(Finding.status == "confirmed")
-        .order_by(KnowledgeVersion.approved_at.desc())
-    ).all()
     return [
         {
             "version_id": str(v.id),
@@ -114,5 +97,5 @@ def library(session: Session = Depends(tx)) -> list:
             "approved_by": v.approved_by,
             "approved_at": v.approved_at,
         }
-        for v, f, h in rows
+        for v, f, h in library_versions(session)
     ]
