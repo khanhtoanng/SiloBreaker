@@ -5,8 +5,9 @@ b. alice: Detect: Settlement 88 with score chart, Webhooks 60 with cap line, Sho
           (raw 87.5) -> Confirm -> answer -> Structure -> Save draft -> Approve -> OKF ->
           generate + release exercise -> log out
 c. bob:   /learn without rubric -> Help: a knowledge question is paused (locked) -> unsafe
-          answer (Not yet demonstrated) -> Try again with a correct paraphrase (Demonstrated,
-          Earlier attempts (1)) -> Help: the same question gets a cited knowledge answer whose
+          answer (Not yet demonstrated) -> Learning Coach: missed items with the approved line,
+          one practice check -> the coach's Try again with a correct paraphrase (Demonstrated,
+          Earlier attempts (1), "Nothing to fix in this attempt.") -> Help: the same question gets a cited knowledge answer whose
           chip opens the Library -> /admin shows 403 -> log out -> browser Back stays signed out
 d. admin: /admin/audit shows actions by all three, filterable per person
 e. a wrong password and an unknown user get the same generic message
@@ -31,6 +32,7 @@ BASE = os.environ.get("SB_E2E_BASE_URL", "http://localhost:5173")
 ROOT = Path(__file__).resolve().parents[1]
 ORACLE = ROOT / "fixtures" / "oracle"
 EXPERT_ANSWER = json.loads((ORACLE / "expert_capture.json").read_text())["answer"]
+GUIDANCE = ("prerequisites", "steps", "stop_and_escalate", "success_checks")
 SUCCESSOR = json.loads((ORACLE / "successor_answers.json").read_text())
 # Demo-only accounts created by `python -m app.seed_users`.
 ACCOUNTS = {"admin": "Admin@123", "alice": "Alice@123", "bob": "Bob@123"}
@@ -179,11 +181,39 @@ def successor_answers(page: Page, run: int) -> None:
     expect(verify.locator(".verdict-unmet").first).to_be_visible()
     shot(page, run, "5-not-yet")
 
-    verify.get_by_role("button", name="Try again").click()
+    # The coach points at the approved lines behind what Bob missed; practice is not counted.
+    verify.get_by_role("button", name="Coach me on this attempt").click()
+    coach = verify.get_by_role(
+        "region", name="Learning Coach — practice does not change your result."
+    )
+    cards = coach.get_by_role("article")
+    expect(cards.first).to_be_visible()
+    assert cards.count() >= 2, "the unsafe answer misses several criteria"
+    expect(verify).not_to_contain_text("ritical")
+    card = cards.first
+    # The quoted line is a line of the approved version the Library link opens.
+    line = card.locator("blockquote").inner_text()
+    href = card.get_by_role("link", name=re.compile("in the Library$")).get_attribute("href")
+    version_id = re.fullmatch(r"/library\?open=([0-9a-f-]+)", href or "")[1]
+    approved = page.request.get(f"{BASE}/api/knowledge/{version_id}").json()["approved_content"]
+    assert line in {x for f in GUIDANCE for x in approved[f]}, f"{line!r} is not approved"
+    card.get_by_role("textbox").fill("I would buy a coffee first.")
+    card.get_by_role("button", name="Check").click()
+    expect(card.get_by_role("status")).to_contain_text("Not covered yet.")
+    card.get_by_role("button", name="Try another wording").click()
+    card.get_by_role("textbox").fill(line)
+    card.get_by_role("button", name="Check").click()
+    expect(card.get_by_role("status")).to_contain_text("Covered.")
+    # Practice is not an attempt.
+    expect(verify.get_by_text("Earlier attempts")).to_have_count(0)
+    shot(page, run, "5b-coach")
+
+    coach.get_by_role("button", name="Try again").click()
     verify.get_by_label("Your answer").fill(SUCCESSOR["correct_paraphrase"])
     verify.get_by_role("button", name="Submit answer").click()
     expect(result).to_have_text("Demonstrated in this exercise")
     expect(verify.get_by_text("Earlier attempts (1)")).to_be_visible()
+    expect(verify.get_by_text("Nothing to fix in this attempt.")).to_be_visible()
     shot(page, run, "6-demonstrated")
 
     # After submitting, the same question gets quoted approved lines with a citation.

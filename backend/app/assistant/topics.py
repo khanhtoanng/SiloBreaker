@@ -682,6 +682,33 @@ TOPICS: tuple[Topic, ...] = (
         suggest="What does Request review do?",
         suggest_on=("/learn/exercises",),
     ),
+    Topic(
+        id="learning-coach",
+        title="Learning Coach",
+        roles=("successor", "candidate"),
+        pages=("/learn",),
+        keywords=(
+            "coach",
+            "coaching",
+            "learning",
+            "practice",
+            "practise",
+            "missed",
+            "missing",
+            "improve",
+            "reread",
+        ),
+        answer=(
+            "After an assessed attempt that is not fully demonstrated, use Coach me on this "
+            "attempt below its result. For each criterion your answer did not fully meet, the "
+            "coach quotes the line of the approved knowledge it was built from, says in a "
+            "sentence what your answer missed, and offers a practice question you can check "
+            "right away. Only you see your coach. Practice is never counted as an attempt, "
+            "never stored and never changes your result or score. A successor can then use "
+            "Try again; in a common assessment the official result stands."
+        ),
+        suggest="What is the learning coach?",
+    ),
 )
 
 BY_ID = {t.id: t for t in TOPICS}

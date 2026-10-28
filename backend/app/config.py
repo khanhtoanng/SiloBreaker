@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # Seeds the shuffle that gives candidates their "Candidate A".."D" aliases. Fixed so
     # tests are repeatable; set a private value in a real deployment.
     candidate_alias_seed: str = "silobreaker-demo"
+    # Signs the learning coach's practice tokens so they need no storage. Demo default; set
+    # a private value in a real deployment.
+    coach_secret: str = "silobreaker-demo-coach"
 
 
 @lru_cache

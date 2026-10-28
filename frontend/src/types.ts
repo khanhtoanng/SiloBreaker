@@ -395,3 +395,34 @@ export type AssistantAnswer = {
   suggestions: string[];
   provider: "offline" | "openai" | "offline_fallback";
 };
+
+// Learning coach. Only the attempt's owner gets it; it never carries a criterion's critical
+// flag or source. Practice is checked by the backend and is never stored or counted.
+export type CoachVerdict = "partial" | "unmet";
+
+export type CoachItem = {
+  criterion_id: string;
+  criterion_text: string;
+  verdict: CoachVerdict;
+  your_quote: string | null;
+  explanation: string;
+  reread: { version_id: string; version_no: number; title: string; line_id: string; text: string; link: string };
+  practice: { practice_id: string; prompt: string };
+};
+
+export type Coach = {
+  attempt_id: string;
+  result: AggregateResult | null;
+  met_count: number;
+  total: number;
+  items: CoachItem[];
+  message: string;
+  next_step: "try_again" | "official_result_stands" | "none";
+  provider: "offline" | "openai" | "offline_fallback";
+};
+
+export type PracticeResult = {
+  verdict: "met" | "partial" | "unmet";
+  feedback: string;
+  reread_text: string;
+};

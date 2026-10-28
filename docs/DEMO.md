@@ -134,6 +134,25 @@ read; it never sees drafts, rubrics or anyone's results. While an exercise is op
 answer from the knowledge, so it cannot do the exercise for the learner. Knowledge answers quote
 approved lines and cite the version; when nothing matches, it says it does not know.
 
+## 8. Learning Coach (≈ 1 min)
+
+Play 8.1–8.3 between steps 3.3 and 3.4 (Bob, successor), and 8.4–8.5 after step 5.7 (Carol,
+candidate).
+
+| # | Do | You see |
+|---|---|---|
+| 8.1 | As `bob`, under *Not yet demonstrated*, click **Coach me on this attempt**. | *Learning Coach — practice does not change your result.* One card per criterion Bob missed, in the order of his results, each with *Not met* or *Partly met*, *Your answer did not cover: …*, and **Re-read in the approved knowledge** quoting Alice's approved line with a link to the Library. Nothing says which criteria are critical. |
+| 8.2 | In the first card, type *I would buy a coffee first.* and click **Check**; then **Try another wording**, type the quoted line and **Check** again. | *Not covered yet.*, then *Covered.* with the approved line. There is still no *Earlier attempts*: practice is not an attempt. |
+| 8.3 | Click **Try again** at the bottom of the coach and continue with step 3.4. | The answer form. After the correct paraphrase: *Demonstrated in this exercise* and *Nothing to fix in this attempt.* |
+| 8.4 | As `carol`, on her *Partially demonstrated* official attempt, click **Coach me on this attempt**. | One card only, *Not met: The ledger shows exactly one settlement for the order*; the criteria she met are only counted (*4 of 5 criteria met*). |
+| 8.5 | Type *Done means the ledger has exactly one settlement for it.* and click **Check**. | *Covered.* Below the coach: *Your official result for this assessment stands. Practice is for learning only.* Her score is still 86%, and there is no **Submit answer** or **Try again**. |
+
+**Why it matters:** the coach sends the learner back to the exact approved line instead of
+inventing advice, and it shows nothing of the rubric the learner could not already see. Practice
+is checked instantly but never stored or counted, so it cannot change a result, a score or a
+selection. Only the learner who answered can open it; the admin's audit log shows one
+`coach.opened` per attempt, with no text.
+
 ---
 
 ## Answers to copy
