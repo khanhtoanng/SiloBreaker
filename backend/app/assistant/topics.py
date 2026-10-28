@@ -25,6 +25,8 @@ from app.verify.selection import (
 
 ROLES = ("admin", "expert", "successor", "candidate")
 ANY = "any"
+LIVE_DATA_TOPIC = "live-data"
+HOME_PAGES = ("/", "/admin", "/expert", "/learn")
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,8 @@ class Topic:
     # A question this topic answers, offered as a suggestion on these route prefixes.
     suggest: str
     suggest_on: tuple[str, ...] = ()
+    # Exact pages (a role's home page) where this topic's question is always suggested first.
+    pin_on: tuple[str, ...] = ()
 
 
 FORMULA = " + ".join(f"{w}{k}" for k, w in WEIGHTS.items())
@@ -50,6 +54,22 @@ def _num(x: float) -> str:
 
 TOPICS: tuple[Topic, ...] = (
     # ---------- everyone ----------
+    Topic(
+        id=LIVE_DATA_TOPIC,
+        title="Live data answers",
+        roles=(ANY,),
+        pages=(ANY,),
+        keywords=("live", "data", "database"),
+        answer=(
+            "The assistant can answer a few questions from live data: Are there any handoffs?, "
+            "What is the status of my handoff?, What is waiting for me? and When is my "
+            "assessment due? It shows only what you can already open in the app: an "
+            "administrator sees every handoff; everyone else sees only the handoffs they take "
+            "part in and their own state, never other people's answers or scores."
+        ),
+        suggest="What is waiting for me?",
+        pin_on=HOME_PAGES,
+    ),
     Topic(
         id="sign-in-out",
         title="Signing in and out",

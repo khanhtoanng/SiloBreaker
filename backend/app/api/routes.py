@@ -18,6 +18,7 @@ from app.auth.deps import (
     handoff_role,
     require_admin,
     require_handoff_role,
+    visible_handoffs,
 )
 from app.coach import service as coach
 from app.config import get_settings
@@ -201,18 +202,9 @@ def create_handoff(
 @authed.get("/handoffs")
 def list_handoffs(session: Session = Depends(tx), user: AppUser = Depends(current_user)) -> list:
     """Admins see every handoff; members see the ones they take part in, including selecting
-    handoffs they are a candidate of."""
-    stmt = select(Handoff).order_by(Handoff.created_at.desc())
-    if user.role != "admin":
-        pid = user.person_id or ""
-        candidate_of = select(HandoffCandidate.handoff_id).where(HandoffCandidate.person_id == pid)
-        stmt = stmt.where(
-            (Handoff.expert_id == pid)
-            | (Handoff.successor_id == pid)
-            | ((Handoff.status == "selecting") & Handoff.id.in_(candidate_of))
-        )
+    handoffs they are a candidate of (app.auth.deps.visible_handoffs)."""
     out = []
-    for h in session.scalars(stmt):
+    for h in visible_handoffs(session, user):
         r = handoff_role(user, h)
         out.append(S.handoff_out(h, r) | {"viewer_role": r})
     return out
