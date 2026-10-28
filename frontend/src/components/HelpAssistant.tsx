@@ -33,7 +33,37 @@ function CitationChip({ c }: { c: AssistantCitation }) {
         Knowledge: {c.title} v{c.version_no}
       </Link>
     );
+  if (c.kind === "page")
+    return (
+      <Link className="chip chip-page" to={c.link ?? c.id}>
+        {c.title}
+      </Link>
+    );
   return <span className="chip">Help: {c.title}</span>;
+}
+
+/** A live-data answer: a heading line, then one row per line, each linking to the page the
+ *  signed-in user may open for it. Every row and link comes from the backend. */
+function DataAnswer({ reply }: { reply: AssistantAnswer }) {
+  const [heading, ...rows] = reply.answer.split("\n");
+  const paired = rows.length > 0 && rows.length === reply.citations.length;
+  return (
+    <>
+      <p className="assistant-data-label small">Live data · only what you can see</p>
+      <p>{heading}</p>
+      {paired ? (
+        <ul className="assistant-rows">
+          {rows.map((row, i) => (
+            <li key={i}>
+              <Link to={reply.citations[i].link ?? reply.citations[i].id}>{row}</Link>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        rows.map((row, i) => <p key={i}>{row}</p>)
+      )}
+    </>
+  );
 }
 
 /** Answers only from the help guide and approved knowledge. History lives in this
@@ -125,8 +155,8 @@ export default function HelpAssistant() {
                     </p>
                   ) : (
                     <div className={`assistant-answer mode-${m.reply.mode}`}>
-                      <p>{m.reply.answer}</p>
-                      {m.reply.citations.length > 0 && (
+                      {m.reply.mode === "data" ? <DataAnswer reply={m.reply} /> : <p>{m.reply.answer}</p>}
+                      {m.reply.mode !== "data" && m.reply.citations.length > 0 && (
                         <div className="row wrap gap-s" aria-label="Sources">
                           {m.reply.citations.map((c) => (
                             <CitationChip key={`${c.kind}:${c.id}`} c={c} />

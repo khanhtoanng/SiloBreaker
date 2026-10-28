@@ -378,10 +378,13 @@ export type LibraryEntry = {
 
 // Help assistant. Answers come only from curated help topics and approved knowledge; the
 // backend decides the mode (and the assessment lock) from the session.
-export type AssistantMode = "help" | "knowledge" | "locked" | "unknown";
+// "data": read-only live answers (handoffs, status, what is waiting, due time) under the same
+// visibility rules as the app. The first answer line is a heading; each further line is one row
+// and has exactly one page citation, in the same order.
+export type AssistantMode = "help" | "knowledge" | "data" | "locked" | "unknown";
 
 export type AssistantCitation = {
-  kind: "help_topic" | "knowledge_version";
+  kind: "help_topic" | "knowledge_version" | "page";
   id: string;
   title: string;
   version_no?: number;
