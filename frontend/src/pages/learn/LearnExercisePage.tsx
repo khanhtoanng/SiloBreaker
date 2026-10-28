@@ -26,6 +26,7 @@ export default function LearnExercisePage() {
         versionNo={data.knowledge_version_no}
         expectedRole={data.viewer_role}
         exerciseId={data.id}
+        coach
         onOpenKnowledge={() =>
           navigate(`/library?open=${data.knowledge_version_id}&back=${encodeURIComponent(back)}`)
         }

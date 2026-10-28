@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "../api";
 import type { AggregateResult, Attempt, Criterion, Exercise, HandoffRole, Verdict } from "../types";
 import ErrorNotice from "./ErrorNotice";
+import LearningCoach from "./LearningCoach";
 
 // Labels only. Every verdict and result comes from the backend; nothing is scored here.
 const RESULT_LABEL: Record<AggregateResult, string> = {
@@ -32,9 +33,18 @@ export type VerifyPanelProps = {
   exerciseId?: string;
   // Called after a candidate records opening the study material, to show the knowledge.
   onOpenKnowledge?: () => void;
+  // Offer the learning coach under the latest assessed attempt (the learner's exercise page).
+  coach?: boolean;
 };
 
-export default function VerifyPanel({ versionId, versionNo, expectedRole, exerciseId, onOpenKnowledge }: VerifyPanelProps) {
+export default function VerifyPanel({
+  versionId,
+  versionNo,
+  expectedRole,
+  exerciseId,
+  onOpenKnowledge,
+  coach = false,
+}: VerifyPanelProps) {
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -117,6 +127,7 @@ export default function VerifyPanel({ versionId, versionNo, expectedRole, exerci
         <SuccessorView
           exercise={exercise}
           busy={!!busy}
+          coach={coach}
           onSubmit={(answer) => run("Assessing your answer", () => api.submitAttempt(exercise!.id, { answer }))}
           onReassess={(attemptId) => run("Re-assessing", () => api.reassess(attemptId))}
           onRequestReview={(attemptId) => run("Requesting a review", () => api.requestReview(attemptId))}
@@ -322,6 +333,7 @@ function ReviewForm({
 function SuccessorView({
   exercise,
   busy,
+  coach,
   onSubmit,
   onReassess,
   onRequestReview,
@@ -329,6 +341,7 @@ function SuccessorView({
 }: {
   exercise: Exercise | null;
   busy: boolean;
+  coach: boolean;
   onSubmit: (answer: string) => void;
   onReassess: (attemptId: string) => void;
   onRequestReview: (attemptId: string) => void;
@@ -394,6 +407,13 @@ function SuccessorView({
         last && (
           <>
             <AttemptCard attempt={last} index={attempts.length} showScore={candidate !== null} />
+            {coach &&
+              last.assessment_status === "succeeded" &&
+              ((last.effective_result ?? last.aggregate_result) === "demonstrated" ? (
+                <p className="muted small">Nothing to fix in this attempt.</p>
+              ) : (
+                <LearningCoach key={last.id} attemptId={last.id} onTryAgain={() => setAnswering(true)} />
+              ))}
             {last.assessment_status === "failed" ? (
               <button className="secondary" disabled={busy} onClick={() => onReassess(last.id)}>
                 Assess again

@@ -6,6 +6,7 @@ import type {
   AuditEvent,
   Bundle,
   Chunk,
+  Coach,
   Criterion,
   Draft,
   Exercise,
@@ -19,6 +20,7 @@ import type {
   LibraryEntry,
   MyExercise,
   Page,
+  PracticeResult,
   Readiness,
   Role,
   SelectionDecision,
@@ -193,4 +195,9 @@ export const api = {
   // Help assistant. Nothing is stored; who is asking comes from the session.
   ask: (b: { question: string; page: string; handoff_id?: string }) =>
     call<AssistantAnswer>("POST", "/assistant/ask", b),
+
+  // Learning coach. Only the attempt's owner; practice is never stored or counted.
+  getCoach: (attemptId: string) => call<Coach>("GET", `/attempts/${attemptId}/coach`),
+  checkPractice: (b: { practice_id: string; answer: string }) =>
+    call<PracticeResult>("POST", "/coach/practice", b),
 };

@@ -177,6 +177,20 @@ textarea { resize: vertical; }
 .verdict-partial .verdict-label, .verdict-uncertain .verdict-label { color: var(--system); }
 .answer { white-space: pre-wrap; }
 .check input { width: auto; margin: 0; padding: 0; }
+/* Learning coach: practice feedback only; it never shows a score or a critical flag. */
+.coach { display: grid; gap: 10px; border-top: 1px dashed var(--line); padding-top: 10px; min-width: 0; }
+.coach h3 { margin: 0; }
+.coach-card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.coach-card p { margin: 0; }
+.coach-criterion .chip { margin-right: 6px; }
+.coach-reread { background: var(--source-bg); border-radius: 6px; padding: 8px 10px; display: grid; gap: 4px; }
+.coach-reread blockquote { margin: 0; padding-left: 10px; border-left: 3px solid var(--source); }
+.coach-practice textarea { width: 100%; box-sizing: border-box; }
+.coach-feedback { border-radius: 6px; padding: 6px 10px; display: grid; gap: 4px; }
+.coach-feedback p { margin: 0; }
+.practice-met { background: var(--human-bg); color: var(--human); }
+.practice-partial { background: var(--system-bg); color: var(--system); }
+.practice-unmet { background: #fbeaea; color: var(--danger); }
 
 /* ---------- Website shell ---------- */
 /* Grid children default to min-width:auto, which lets a wide table stretch the page instead
