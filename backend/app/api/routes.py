@@ -1,14 +1,16 @@
 import uuid
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.analysis.service import run_analysis
 from app.api import serializers as S
+from app.assistant import service as assistant
 from app.audit import audit
 from app.auth.deps import (
     actor_label,
@@ -545,6 +547,25 @@ def get_okf(version_id: str, session: Session = Depends(tx)) -> PlainTextRespons
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{f.area_key}-v{v.version_no}.md"'},
     )
+
+
+# ---------- help assistant ----------
+
+
+class AskIn(BaseModel):
+    """Who is asking comes from the session; any role or actor field sent here is ignored."""
+
+    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+    page: str = Field(default="", max_length=200)
+    handoff_id: str | None = Field(default=None, max_length=64)
+
+
+@authed.post("/assistant/ask")
+def ask_assistant(
+    body: AskIn, session: Session = Depends(tx), user: AppUser = Depends(current_user)
+) -> dict:
+    """Answers from the help guide or approved knowledge. Nothing is stored or audited."""
+    return assistant.answer(session, user, body.question, body.page, body.handoff_id)
 
 
 # ---------- demo ----------

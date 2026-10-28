@@ -22,6 +22,7 @@ Human approval is the boundary between system interpretation and approved knowle
 | Multi-page website: `/login`, `/admin/*`, `/expert/*`, `/learn/*`, `/library`; SVG score chart | Done |
 | Browser e2e of the signed-in flow across admin, expert and successor (`e2e/demo_flow.py`) | Done |
 | Successor selection: choose later, Suitability (fit), common assessment, Results (score, top, tie), admin decision, expert review; browser e2e (`e2e/selection_flow.py`) | Done |
+| Help Assistant: role-scoped help and cited answers from approved knowledge, assessment lock, offline by default | Done |
 | Production hardening: HTTPS (`SB_SESSION_COOKIE_SECURE=true`), login rate limiting, password policy beyond length | Not done |
 
 ## Quick start / Chạy nhanh
@@ -97,12 +98,12 @@ and never seed them in a real deployment.
 ## Tests
 
 ```bash
-cd backend && pytest -q          # 174 tests against PostgreSQL (silobreaker_test)
+cd backend && pytest -q          # 189 tests against PostgreSQL (silobreaker_test)
 cd backend && ruff check app tests && ruff format --check app tests
-cd frontend && npm test          # 40 Vitest tests (jsdom)
+cd frontend && npm test          # 46 Vitest tests (jsdom)
 cd frontend && npm run build     # type-check + build
 pip install -e "backend[e2e]" && playwright install chromium
-python e2e/demo_flow.py --runs 3 # admin -> expert -> successor -> audit; API (seeded) and dev server running
+python e2e/demo_flow.py --runs 3 # admin -> expert -> successor (+ Help Assistant) -> audit; API (seeded) and dev server running
 python e2e/selection_flow.py --runs 3 # choose later -> Suitability -> common assessment -> Results -> decision
 # If the Chromium download is blocked: SB_E2E_BROWSER_CHANNEL=chrome (or msedge) uses an installed browser
 ```
@@ -225,6 +226,44 @@ in the ranked areas (for example a new hire). The page says so instead of drawin
 - A handoff created with `candidate_ids` directly (phase 1 API, kept for compatibility) has no
   due time and allows `max_attempts` = 2; the website uses the common assessment instead.
 
+## Help Assistant
+
+A **Help** button at the bottom right of every signed-in page opens the *SiloBreaker
+Assistant* (`POST /api/assistant/ask`, `backend/app/assistant/`). It has two modes:
+
+- **Help**: how to use the website and how its numbers work ("What do I click next?", "Why is
+  Webhooks capped at 60?", "What does No history mean?"). Answers come from about 30 curated
+  topics in `topics.py`, filtered by the signed-in user's role (admin, expert, successor,
+  candidate) and the current page. Every number in a topic is built from the constant the code
+  computes it with (`app.scoring.rules`, `app.verify.selection`).
+- **Knowledge**: answers from approved Knowledge Units only, as quoted approved lines
+  (preconditions, steps, stop-and-escalate, success checks) under fixed headings, with a
+  citation to the version that links to its Library entry. If nothing matches well enough
+  (named thresholds in `retrieval.py`), it says it does not know and points to the Library.
+
+**Sources whitelist.** Only the curated topics and the approved versions `/library` lists
+(`knowledge.service.library_versions`, the same rule). Never drafts, exercise rubrics, oracle
+fixtures, anyone's attempts, scores, fit or aliases, evidence chunks, the audit log, passwords,
+sessions or settings. Who is asking comes from the session; a role or actor in the body is
+ignored. `POST` needs `X-Requested-With`, like every write.
+
+**Assessment lock.** While a user has a released exercise of their own still unanswered (a
+successor before their first counted attempt, or a candidate of an open common assessment before
+their official attempt), knowledge questions return `mode: "locked"` with *Knowledge answers are
+paused while you have an exercise to complete.* Help about the website still works; help topics
+never describe an exercise answer, its rubric or which criteria are critical.
+
+**Offline by default.** Retrieval is lexical, with the tokenizer and synonyms shared with the
+offline assessor (`app/lexical.py`): deterministic, no network, no key. With
+`SB_AI_PROVIDER=openai`, knowledge answers go to the model with only the retrieved lines, each
+with an id, under a prompt that treats them as data; code accepts the answer only when it cites
+at least one id and only ids it was given. Otherwise, and on any provider timeout or error, the
+offline answer is returned with `provider: "offline_fallback"`. Help answers never call the
+model.
+
+**No storage.** No table and no migration: chat history lives in React state and is gone on
+reload. Questions are not written to the audit log, the database or the logs.
+
 ## Repository layout
 
 ```text
@@ -233,6 +272,7 @@ backend/
   app/analysis/    extraction contract, citation validation, offline extractor, Detect flow
   app/scoring/     deterministic signals, gates, caps, confidence (pure functions)
   app/knowledge/   review, drafts, approval, immutable versions, OKF renderer
+  app/assistant/   help assistant: curated topics, lexical retrieval, assessment lock
   app/auth/        password hashing, server-side sessions, login/logout, authorization dependencies
   app/api/         FastAPI routes (including admin users/audit, library, my exercises)
   app/seed_users.py  demo accounts (python -m app.seed_users)

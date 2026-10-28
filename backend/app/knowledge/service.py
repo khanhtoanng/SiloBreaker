@@ -234,3 +234,30 @@ def prior_knowledge(session: Session, finding: Finding) -> dict | None:
     if row is None:
         return None
     return {"finding_id": str(row[2]), "version_id": str(row[0]), "version_no": row[1]}
+
+
+def library_versions(session: Session) -> list[tuple[KnowledgeVersion, Finding, Handoff]]:
+    """The newest approved version of every confirmed finding, newest approval first.
+
+    This is the one rule for which approved knowledge a signed-in user may read: /library
+    lists it and the help assistant answers from it. Obsolete (retired) knowledge is left out.
+    """
+    newest = (
+        select(KnowledgeVersion.finding_id, func.max(KnowledgeVersion.version_no).label("n"))
+        .group_by(KnowledgeVersion.finding_id)
+        .subquery()
+    )
+    rows = session.execute(
+        select(KnowledgeVersion, Finding, Handoff)
+        .join(
+            newest,
+            (KnowledgeVersion.finding_id == newest.c.finding_id)
+            & (KnowledgeVersion.version_no == newest.c.n),
+        )
+        .join(Finding, KnowledgeVersion.finding_id == Finding.id)
+        .join(Analysis, Finding.analysis_id == Analysis.id)
+        .join(Handoff, Analysis.handoff_id == Handoff.id)
+        .where(Finding.status == "confirmed")
+        .order_by(KnowledgeVersion.approved_at.desc())
+    ).all()
+    return [(v, f, h) for v, f, h in rows]

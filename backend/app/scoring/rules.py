@@ -15,6 +15,9 @@ CAP = 60
 MIN_ATTRIBUTABLE_EVENTS = 2
 REQUIRED_DOC_FACETS = ("preconditions", "steps", "stop_and_escalate", "success_checks")
 MAX_RANKED = 3
+# Shown under a capped score; the help assistant quotes these same strings.
+CAP_REASON_PARTICIPATION = "Capped: selected engineer handled only part of the attributable events."
+CAP_REASON_ALTERNATE_RECOVERY = "Capped: two or more recoveries by other engineers were found."
 
 Signal = float | None  # None means unknown
 
@@ -154,9 +157,9 @@ def score_area(area: AreaObs, selected: str) -> ScoreResult:
         )
     reasons = []
     if o is not None and o < 1:
-        reasons.append("Capped: selected engineer handled only part of the attributable events.")
+        reasons.append(CAP_REASON_PARTICIPATION)
     if b == 0:
-        reasons.append("Capped: two or more recoveries by other engineers were found.")
+        reasons.append(CAP_REASON_ALTERNATE_RECOVERY)
     assert raw is not None
     priority = round_half_up(min(raw, CAP) if reasons else raw)
     return result("ranked", priority, reasons)

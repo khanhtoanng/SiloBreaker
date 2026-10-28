@@ -375,3 +375,23 @@ export type LibraryEntry = {
   approved_by: string;
   approved_at: string;
 };
+
+// Help assistant. Answers come only from curated help topics and approved knowledge; the
+// backend decides the mode (and the assessment lock) from the session.
+export type AssistantMode = "help" | "knowledge" | "locked" | "unknown";
+
+export type AssistantCitation = {
+  kind: "help_topic" | "knowledge_version";
+  id: string;
+  title: string;
+  version_no?: number;
+  link?: string;
+};
+
+export type AssistantAnswer = {
+  mode: AssistantMode;
+  answer: string;
+  citations: AssistantCitation[];
+  suggestions: string[];
+  provider: "offline" | "openai" | "offline_fallback";
+};
