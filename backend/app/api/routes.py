@@ -19,6 +19,7 @@ from app.auth.deps import (
     require_admin,
     require_handoff_role,
 )
+from app.coach import service as coach
 from app.config import get_settings
 from app.db import tx
 from app.errors import AppError
@@ -566,6 +567,32 @@ def ask_assistant(
 ) -> dict:
     """Answers from the help guide or approved knowledge. Nothing is stored or audited."""
     return assistant.answer(session, user, body.question, body.page, body.handoff_id)
+
+
+# ---------- learning coach ----------
+
+
+@authed.get("/attempts/{attempt_id}/coach")
+def get_coach(
+    attempt_id: str, session: Session = Depends(tx), user: AppUser = Depends(current_user)
+) -> dict:
+    """The owner's coach for an assessed attempt. Writes one coach.opened audit event, once."""
+    return coach.coach_for_attempt(session, user, attempt_id)
+
+
+class PracticeIn(BaseModel):
+    """Who is practising comes from the session; the token names the attempt and line."""
+
+    practice_id: str = Field(min_length=1, max_length=400)
+    answer: str = Field(min_length=1, max_length=1000)
+
+
+@authed.post("/coach/practice")
+def check_practice(
+    body: PracticeIn, session: Session = Depends(tx), user: AppUser = Depends(current_user)
+) -> dict:
+    """Checks a practice answer. Not an attempt: nothing is stored, logged or audited."""
+    return coach.check_practice(session, user, body.practice_id, body.answer)
 
 
 # ---------- demo ----------
