@@ -121,18 +121,24 @@ outside the top is allowed but needs a written reason that stays in the record.
 ## 7. Help Assistant (≈ 1 min)
 
 The **Help** button sits at the bottom right of every signed-in page. Play 7.2 between steps 3.2
-and 3.3, and 7.3 after step 3.4.
+and 3.3, and 7.3 after step 3.4. Play 7.4 after step 1.3, 7.5 after step 5.4 (Carol is a
+candidate) and 7.6 after step 2.2.
 
 | # | Do | You see |
 |---|---|---|
 | 7.1 | As `alice` on the Detect page, click **Help** and ask *Why is Webhooks capped at 60?* | A help answer: the cap at 60, the raw score is computed first, and the two reasons exactly as shown under the Webhooks score (*Capped: selected engineer handled only part of the attributable events.* and *Capped: two or more recoveries by other engineers were found.*). Chip *Help: The cap at 60* and three suggested questions. |
 | 7.2 | As `bob` on the exercise, before submitting: **Help** → *What should I check before retrying a settlement?* | A grey notice: *Knowledge answers are paused while you have an exercise to complete. Read the approved knowledge yourself from the exercise page.* No citation. *What do I click next?* still gets a help answer. |
 | 7.3 | After **Demonstrated in this exercise**, ask the same question again. | The approved lines Alice wrote, quoted as they are under *Steps*, *Stop and escalate* and *Success checks*, with the chip *Knowledge: Settlement recovery v1*. Clicking the chip opens that entry in the **Library**. |
+| 7.4 | As `admin`, ask *Are there any handoffs?* | The label *Live data · only what you can see* and the line *Alice → Bob · active*, linked to **Handoffs**. Every handoff is listed, newest first. |
+| 7.5 | As `carol`, ask *Are there any handoffs?* | Only the handoff she is a candidate in: *Alice → successor not chosen · choosing a successor*, linked to **Learning**. No other handoff, candidate name, alias or score. Asked before any handoff includes her, the answer is *You are not part of any handoff yet.* |
+| 7.6 | As `alice`, ask *What is waiting for me?* (suggested first on her home page). | *Waiting for you:* with *… findings to review*, linked to the Detect page; later also drafts to approve, versions without a released exercise and review requests, each linked to its page. |
 
 **Why it matters:** the assistant only uses the help guide and approved knowledge the user may
 read; it never sees drafts, rubrics or anyone's results. While an exercise is open it will not
 answer from the knowledge, so it cannot do the exercise for the learner. Knowledge answers quote
-approved lines and cite the version; when nothing matches, it says it does not know.
+approved lines and cite the version; when nothing matches, it says it does not know. Live
+data answers are read from the database under the same rules as the pages: each person sees
+only what they could already open, and nobody else's answers or scores.
 
 ## 8. Learning Coach (≈ 1 min)
 

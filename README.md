@@ -22,7 +22,7 @@ Human approval is the boundary between system interpretation and approved knowle
 | Multi-page website: `/login`, `/admin/*`, `/expert/*`, `/learn/*`, `/library`; SVG score chart | Done |
 | Browser e2e of the signed-in flow across admin, expert and successor (`e2e/demo_flow.py`) | Done |
 | Successor selection: choose later, Suitability (fit), common assessment, Results (score, top, tie), admin decision, expert review; browser e2e (`e2e/selection_flow.py`) | Done |
-| Help Assistant: role-scoped help and cited answers from approved knowledge, assessment lock, offline by default | Done |
+| Help Assistant: role-scoped help and cited answers from approved knowledge, live data under the app's visibility rules, assessment lock, offline by default | Done |
 | Learning Coach: after an assessed attempt, the approved line behind each missed criterion and uncounted practice, owner only, offline by default | Done |
 | Production hardening: HTTPS (`SB_SESSION_COOKIE_SECURE=true`), login rate limiting, password policy beyond length | Not done |
 
@@ -99,9 +99,9 @@ and never seed them in a real deployment.
 ## Tests
 
 ```bash
-cd backend && pytest -q          # 207 tests against PostgreSQL (silobreaker_test)
+cd backend && pytest -q          # 226 tests against PostgreSQL (silobreaker_test)
 cd backend && ruff check app tests && ruff format --check app tests
-cd frontend && npm test          # 53 Vitest tests (jsdom)
+cd frontend && npm test          # 55 Vitest tests (jsdom)
 cd frontend && npm run build     # type-check + build
 pip install -e "backend[e2e]" && playwright install chromium
 python e2e/demo_flow.py --runs 3 # admin -> expert -> successor (+ Help Assistant, Learning Coach) -> audit; API (seeded) and dev server running
@@ -230,7 +230,7 @@ in the ranked areas (for example a new hire). The page says so instead of drawin
 ## Help Assistant
 
 A **Help** button at the bottom right of every signed-in page opens the *SiloBreaker
-Assistant* (`POST /api/assistant/ask`, `backend/app/assistant/`). It has two modes:
+Assistant* (`POST /api/assistant/ask`, `backend/app/assistant/`). It has three modes:
 
 - **Help**: how to use the website and how its numbers work ("What do I click next?", "Why is
   Webhooks capped at 60?", "What does No history mean?"). Answers come from about 30 curated
@@ -241,9 +241,34 @@ Assistant* (`POST /api/assistant/ask`, `backend/app/assistant/`). It has two mod
   (preconditions, steps, stop-and-escalate, success checks) under fixed headings, with a
   citation to the version that links to its Library entry. If nothing matches well enough
   (named thresholds in `retrieval.py`), it says it does not know and points to the Library.
+- **Data**: read-only answers from the live database for four questions, labelled *Live data ·
+  only what you can see*. Each row links to the page this user may open for it.
 
-**Sources whitelist.** Only the curated topics and the approved versions `/library` lists
-(`knowledge.service.library_versions`, the same rule). Never drafts, exercise rubrics, oracle
+**Data mode.** `intents.py` detects the intent with the shared tokenizer and a small keyword
+table: a question must hit an anchor word, at least 75% of its words must belong to the intent,
+and it must not contain a blocker (score, top, answer, result, create, approve, …) or the words
+how, why or who. So *How do I create a handoff?* still gets the help topic, and *Who scored
+highest?* or *What did Carol answer?* are never data questions. Detection runs before help and
+knowledge ranking. `live_data.py` answers, starting from `visible_handoffs` in
+`app/auth/deps.py`, the same rule `GET /api/handoffs` uses:
+
+| Intent | Example | What each user sees |
+|---|---|---|
+| `list_handoffs` | *Are there any handoffs?* | One line per visible handoff, newest first: *Alice → Bob · active*, linked to `/admin/handoffs` (admin), the Detect page (expert) or `/learn` (successor, candidate). An admin with none: *There are no handoffs yet.* A member with none: *You are not part of any handoff yet.*, whether or not other handoffs exist. |
+| `handoff_status` | *What is the status of my handoff?* | Admin and expert: status, whether an analysis ran, approved versions, whether an exercise is released; the admin also sees *2 of 3 candidates submitted* while selecting. Successor and candidate: status, approved knowledge in the Library, whether an exercise is released; a candidate only *you are one of 3 candidates* and their own state (study opened, official attempt used, due time). |
+| `my_pending` | *What is waiting for me?* | Admin: handoffs without an analysis, closed assessments without a decision. Expert: findings to review, drafts not approved, approved versions without a released exercise, review requests (counts only). Successor and candidate: released exercises not answered yet, with the due time; the title only, never the scenario. Else *Nothing is waiting for you.* |
+| `my_due` | *When is my assessment due?* | A candidate: their due time and whether their official attempt is used. Anyone else: *You have no assessment with a due time.* |
+
+Non-admins never see other people's scores, fit, verdicts, answers, attempt counts or aliases;
+nobody sees rubrics, drafts, evidence text, the audit log or passwords. Data answers never call a
+model (`provider` is always `"offline"`, even with `SB_AI_PROVIDER=openai`), never unlock
+knowledge answers, and are not stored or audited. *What is waiting for me?* is suggested first
+on every home page (`/`, `/admin`, `/expert`, `/learn`). Conflicts between the brief and the code
+are in [`docs/ASSISTANT_LIVE_DATA_PREWORK.md`](docs/ASSISTANT_LIVE_DATA_PREWORK.md).
+
+**Sources whitelist.** Only the curated topics, the approved versions `/library` lists
+(`knowledge.service.library_versions`, the same rule) and, in data mode, the rows the user can
+already open. Never drafts, exercise rubrics, oracle
 fixtures, anyone's attempts, scores, fit or aliases, evidence chunks, the audit log, passwords,
 sessions or settings. Who is asking comes from the session; a role or actor in the body is
 ignored. `POST` needs `X-Requested-With`, like every write.

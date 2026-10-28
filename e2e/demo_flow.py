@@ -1,6 +1,8 @@
 """Browser-level check of the demo path on the multi-page, signed-in website (docs/DEMO.md):
 
-a. admin: sign in -> Reset demo -> handoff Alice -> Bob -> run analysis -> log out
+a. admin: sign in -> Reset demo -> handoff Alice -> Bob -> run analysis -> Help: "Are there any
+          handoffs?" lists Alice → Bob (live data) -> log out; carol (in no handoff) gets "You are
+          not part of any handoff yet."
 b. alice: Detect: Settlement 88 with score chart, Webhooks 60 with cap line, Show calculation
           (raw 87.5) -> Confirm -> answer -> Structure -> Save draft -> Approve -> OKF ->
           generate + release exercise -> log out
@@ -35,7 +37,8 @@ EXPERT_ANSWER = json.loads((ORACLE / "expert_capture.json").read_text())["answer
 GUIDANCE = ("prerequisites", "steps", "stop_and_escalate", "success_checks")
 SUCCESSOR = json.loads((ORACLE / "successor_answers.json").read_text())
 # Demo-only accounts created by `python -m app.seed_users`.
-ACCOUNTS = {"admin": "Admin@123", "alice": "Alice@123", "bob": "Bob@123"}
+ACCOUNTS = {"admin": "Admin@123", "alice": "Alice@123", "bob": "Bob@123", "carol": "Carol@123"}
+HANDOFFS_QUESTION = "Are there any handoffs?"
 KNOWLEDGE_QUESTION = "What should I check before retrying a settlement?"
 
 parser = argparse.ArgumentParser()
@@ -99,6 +102,29 @@ def admin_setup(page: Page, run: int) -> None:
     # The admin reads results but cannot capture.
     expect(page.get_by_role("button", name="Review with expert")).to_have_count(0)
     shot(page, run, "1-admin-detect")
+
+    # Live data: the admin sees every handoff, with a link to the page for it.
+    panel = ask_help(page, HANDOFFS_QUESTION)
+    answer = panel.locator(".mode-data").last
+    expect(answer).to_contain_text("Live data · only what you can see")
+    expect(answer.get_by_role("link", name="Alice → Bob · active")).to_have_attribute(
+        "href", "/admin/handoffs"
+    )
+    shot(page, run, "1a-help-live-data")
+    panel.get_by_role("button", name="Close assistant").click()
+    logout(page)
+
+
+def carol_not_in_handoff(page: Page, run: int) -> None:
+    """Carol takes part in no handoff: she is told so, and nothing about anyone else's."""
+    login(page, "carol")
+    panel = ask_help(page, HANDOFFS_QUESTION)
+    answer = panel.locator(".mode-data").last
+    expect(answer).to_contain_text("You are not part of any handoff yet.")
+    expect(answer).not_to_contain_text("Alice")
+    expect(answer).not_to_contain_text("Bob")
+    expect(answer.get_by_role("link")).to_have_count(0)
+    panel.get_by_role("button", name="Close assistant").click()
     logout(page)
 
 
@@ -291,6 +317,7 @@ with sync_playwright() as p:
         page = context.new_page()
         page.on("dialog", lambda d: d.accept())
         admin_setup(page, run)
+        carol_not_in_handoff(page, run)
         expert_capture(page, run)
         successor_answers(page, run)
         admin_audit(page, run)
