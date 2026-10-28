@@ -1,6 +1,7 @@
 import type {
   AdminUser,
   Analysis,
+  AssistantAnswer,
   Attempt,
   AuditEvent,
   Bundle,
@@ -188,4 +189,8 @@ export const api = {
   requestReview: (id: string) => call<Attempt>("POST", `/attempts/${id}/review-request`),
   reviewAttempt: (id: string, b: { overrides: Record<string, Verdict>; reason: string }) =>
     call<Attempt>("POST", `/attempts/${id}/review`, b),
+
+  // Help assistant. Nothing is stored; who is asking comes from the session.
+  ask: (b: { question: string; page: string; handoff_id?: string }) =>
+    call<AssistantAnswer>("POST", "/assistant/ask", b),
 };
