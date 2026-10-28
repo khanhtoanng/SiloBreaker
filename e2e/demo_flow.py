@@ -4,9 +4,10 @@ a. admin: sign in -> Reset demo -> handoff Alice -> Bob -> run analysis -> log o
 b. alice: Detect: Settlement 88 with score chart, Webhooks 60 with cap line, Show calculation
           (raw 87.5) -> Confirm -> answer -> Structure -> Save draft -> Approve -> OKF ->
           generate + release exercise -> log out
-c. bob:   /learn without rubric -> unsafe answer (Not yet demonstrated) -> Try again with a
-          correct paraphrase (Demonstrated, Earlier attempts (1)) -> /admin shows 403 ->
-          log out -> browser Back stays signed out
+c. bob:   /learn without rubric -> Help: a knowledge question is paused (locked) -> unsafe
+          answer (Not yet demonstrated) -> Try again with a correct paraphrase (Demonstrated,
+          Earlier attempts (1)) -> Help: the same question gets a cited knowledge answer whose
+          chip opens the Library -> /admin shows 403 -> log out -> browser Back stays signed out
 d. admin: /admin/audit shows actions by all three, filterable per person
 e. a wrong password and an unknown user get the same generic message
 
@@ -33,6 +34,7 @@ EXPERT_ANSWER = json.loads((ORACLE / "expert_capture.json").read_text())["answer
 SUCCESSOR = json.loads((ORACLE / "successor_answers.json").read_text())
 # Demo-only accounts created by `python -m app.seed_users`.
 ACCOUNTS = {"admin": "Admin@123", "alice": "Alice@123", "bob": "Bob@123"}
+KNOWLEDGE_QUESTION = "What should I check before retrying a settlement?"
 
 parser = argparse.ArgumentParser()
 parser.add_argument("shots", nargs="?", type=Path)
@@ -66,6 +68,17 @@ def login(page: Page, user: str) -> None:
 def logout(page: Page) -> None:
     page.get_by_role("button", name="Log out").click()
     at(page, "/login")
+
+
+def ask_help(page: Page, question: str):
+    """Opens the Help panel and asks; returns the panel. Chat history stays while signed in."""
+    page.get_by_role("button", name="Open help").click()
+    panel = page.get_by_role("dialog", name="SiloBreaker Assistant")
+    expect(panel).to_contain_text("Answers come only from the help guide and approved knowledge.")
+    box = panel.get_by_role("textbox", name="Your question")
+    box.fill(question)
+    box.press("Enter")
+    return panel
 
 
 def admin_setup(page: Page, run: int) -> None:
@@ -149,6 +162,16 @@ def successor_answers(page: Page, run: int) -> None:
     expect(answer).to_be_visible()
     expect(verify).not_to_contain_text("rubric")
     expect(verify).not_to_contain_text("Critical")
+
+    # Knowledge answers are paused while Bob has an exercise to complete.
+    panel = ask_help(page, KNOWLEDGE_QUESTION)
+    expect(panel.locator(".assistant-locked")).to_contain_text(
+        "Knowledge answers are paused while you have an exercise to complete."
+    )
+    expect(panel.get_by_role("link", name=re.compile("^Knowledge:"))).to_have_count(0)
+    shot(page, run, "5a-help-locked")
+    panel.get_by_role("button", name="Close assistant").click()
+
     answer.fill(SUCCESSOR["unsafe"])
     verify.get_by_role("button", name="Submit answer").click()
     result = verify.locator(".result").first
@@ -162,6 +185,19 @@ def successor_answers(page: Page, run: int) -> None:
     expect(result).to_have_text("Demonstrated in this exercise")
     expect(verify.get_by_text("Earlier attempts (1)")).to_be_visible()
     shot(page, run, "6-demonstrated")
+
+    # After submitting, the same question gets quoted approved lines with a citation.
+    panel = ask_help(page, KNOWLEDGE_QUESTION)
+    chip = panel.get_by_role("link", name="Knowledge: Settlement recovery v1")
+    expect(chip).to_be_visible()
+    expect(panel.locator(".mode-knowledge").last).to_contain_text(
+        "pause the retry worker and escalate to the AcmePay contact"
+    )
+    shot(page, run, "6a-help-knowledge")
+    chip.click()
+    at(page, r"/library\?open=[^&]+")
+    expect(page.get_by_role("button", name="Hide")).to_be_visible()
+    panel.get_by_role("button", name="Close assistant").click()
 
     page.goto(f"{BASE}/admin")
     at(page, "/403")

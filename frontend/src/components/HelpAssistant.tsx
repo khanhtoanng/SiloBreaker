@@ -49,8 +49,13 @@ export default function HelpAssistant() {
   const listEnd = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
 
-  useEffect(() => setSuggestions(starterQuestions(pathname)), [pathname]);
-  useEffect(() => listEnd.current?.scrollIntoView?.({ block: "end" }), [messages, busy]);
+  // Block bodies: an effect must return nothing or a cleanup function.
+  useEffect(() => {
+    setSuggestions(starterQuestions(pathname));
+  }, [pathname]);
+  useEffect(() => {
+    listEnd.current?.scrollIntoView?.({ block: "end" });
+  }, [messages, busy]);
   useEffect(() => {
     if (open) input.current?.focus();
   }, [open]);

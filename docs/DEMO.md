@@ -4,7 +4,8 @@ A scripted walk through the signed-in website: an administrator sets up a handof
 experienced engineer captures missing knowledge, the successor proves they can use it, and the
 audit log shows who did what. The same path is automated in `e2e/demo_flow.py`. Scene 5 shows
 how the administrator chooses a successor among several people; it is automated in
-`e2e/selection_flow.py`.
+`e2e/selection_flow.py`. Scene 7 shows the Help Assistant; its successor part is in
+`e2e/demo_flow.py`.
 
 ## Before you start
 
@@ -116,6 +117,22 @@ assessment gives every candidate the same exercise, the same study material and 
 attempt, and only the administrator sees names next to results. The ranking puts anyone who
 missed a critical condition below everyone who did not, a tie is shown as a tie, and choosing
 outside the top is allowed but needs a written reason that stays in the record.
+
+## 7. Help Assistant (≈ 1 min)
+
+The **Help** button sits at the bottom right of every signed-in page. Play 7.2 between steps 3.2
+and 3.3, and 7.3 after step 3.4.
+
+| # | Do | You see |
+|---|---|---|
+| 7.1 | As `alice` on the Detect page, click **Help** and ask *Why is Webhooks capped at 60?* | A help answer: the cap at 60, the raw score is computed first, and the two reasons exactly as shown under the Webhooks score (*Capped: selected engineer handled only part of the attributable events.* and *Capped: two or more recoveries by other engineers were found.*). Chip *Help: The cap at 60* and three suggested questions. |
+| 7.2 | As `bob` on the exercise, before submitting: **Help** → *What should I check before retrying a settlement?* | A grey notice: *Knowledge answers are paused while you have an exercise to complete. Read the approved knowledge yourself from the exercise page.* No citation. *What do I click next?* still gets a help answer. |
+| 7.3 | After **Demonstrated in this exercise**, ask the same question again. | The approved lines Alice wrote, quoted as they are under *Steps*, *Stop and escalate* and *Success checks*, with the chip *Knowledge: Settlement recovery v1*. Clicking the chip opens that entry in the **Library**. |
+
+**Why it matters:** the assistant only uses the help guide and approved knowledge the user may
+read; it never sees drafts, rubrics or anyone's results. While an exercise is open it will not
+answer from the knowledge, so it cannot do the exercise for the learner. Knowledge answers quote
+approved lines and cite the version; when nothing matches, it says it does not know.
 
 ---
 
