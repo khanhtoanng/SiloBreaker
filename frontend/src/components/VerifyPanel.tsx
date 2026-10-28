@@ -349,6 +349,8 @@ function SuccessorView({
 }) {
   const [answer, setAnswer] = useState("");
   const [answering, setAnswering] = useState(true);
+  // While the coach is open it offers Try again itself, so the row below does not repeat it.
+  const [coaching, setCoaching] = useState(false);
   const attempts = exercise?.attempts ?? [];
   const last: Attempt | undefined = attempts[attempts.length - 1];
   const candidate = exercise?.candidate ?? null;
@@ -359,6 +361,7 @@ function SuccessorView({
     // Show the form until there is an attempt; afterwards show its result first.
     setAnswering(attempts.length === 0 && !outOfAttempts);
     setAnswer("");
+    setCoaching(false);
   }, [exercise?.id, attempts.length, outOfAttempts]);
 
   if (!exercise) return <p className="notice">The expert has not released an exercise yet.</p>;
@@ -412,7 +415,12 @@ function SuccessorView({
               ((last.effective_result ?? last.aggregate_result) === "demonstrated" ? (
                 <p className="muted small">Nothing to fix in this attempt.</p>
               ) : (
-                <LearningCoach key={last.id} attemptId={last.id} onTryAgain={() => setAnswering(true)} />
+                <LearningCoach
+                  key={last.id}
+                  attemptId={last.id}
+                  onTryAgain={() => setAnswering(true)}
+                  onOpen={() => setCoaching(true)}
+                />
               ))}
             {last.assessment_status === "failed" ? (
               <button className="secondary" disabled={busy} onClick={() => onReassess(last.id)}>
@@ -425,7 +433,7 @@ function SuccessorView({
                     Request review
                   </button>
                 )}
-                {!outOfAttempts && (
+                {!outOfAttempts && !coaching && (
                   <button className="secondary" disabled={busy} onClick={() => setAnswering(true)}>
                     Try again
                   </button>

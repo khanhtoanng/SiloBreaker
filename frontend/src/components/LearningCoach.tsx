@@ -17,9 +17,11 @@ export type LearningCoachProps = {
   attemptId: string;
   // The existing Try again action of the exercise page (successors only).
   onTryAgain?: () => void;
+  // Lets the page hide its own Try again while the coach offers it.
+  onOpen?: () => void;
 };
 
-export default function LearningCoach({ attemptId, onTryAgain }: LearningCoachProps) {
+export default function LearningCoach({ attemptId, onTryAgain, onOpen }: LearningCoachProps) {
   const [coach, setCoach] = useState<Coach | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -29,6 +31,7 @@ export default function LearningCoach({ attemptId, onTryAgain }: LearningCoachPr
     setError(null);
     try {
       setCoach(await api.getCoach(attemptId));
+      onOpen?.();
     } catch (e) {
       setError(e);
     } finally {

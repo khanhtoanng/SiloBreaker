@@ -5,7 +5,10 @@ b. alice: confirm Settlement, capture, approve v1, generate and release the exer
 c. admin: Suitability shows Bob 20%, Carol 20%, Minh "No history - not 0%" -> select all
           three -> Start common assessment (released exercise, due date)
 d. bob (correct), carol (partial_answer), minh (unsafe): Submit locked -> Read the approved
-          knowledge -> back -> submit the one official attempt -> own score shown
+          knowledge -> back -> submit the one official attempt -> own score shown. Carol
+          opens the Learning Coach: only her missed items, the approved line to re-read, one
+          practice check -> "official result stands", still no Submit or Try again (also at
+          a 360px width)
 e. alice: the exercise lists attempts by alias only, no names
 f. admin: Results shows Bob 100% Best result, Carol and Minh with the scores the backend
           computed from the assessor's verdicts (re-checked here from those verdicts), Minh
@@ -82,12 +85,12 @@ def logout(page: Page) -> None:
     at(page, "/login")
 
 
-def no_horizontal_scroll(page: Page, where: str) -> None:
+def no_horizontal_scroll(page: Page, where: str, viewport: int = 390) -> None:
     """At phone width nothing may scroll sideways."""
-    page.set_viewport_size({"width": 390, "height": 844})
+    page.set_viewport_size({"width": viewport, "height": 844})
     width = page.evaluate("document.documentElement.scrollWidth")
     page.set_viewport_size({"width": 1360, "height": 900})
-    assert width <= 390, f"{where}: page is {width}px wide at a 390px viewport"
+    assert width <= viewport, f"{where}: page is {width}px wide at a {viewport}px viewport"
 
 
 def open_selection(page: Page) -> None:
@@ -224,8 +227,43 @@ def candidate_answers(page: Page, run: int, who: str) -> None:
     expect(verify.get_by_role("button", name="Try again")).to_have_count(0)
     if who == "bob":
         no_horizontal_scroll(page, "Learn")
+        expect(verify.get_by_text("Nothing to fix in this attempt.")).to_be_visible()
+        expect(verify.get_by_role("button", name="Coach me on this attempt")).to_have_count(0)
     shot(page, run, f"4-{who}-scored")
+    if who == "carol":
+        carol_coach(page, run, verify)
     logout(page)
+
+
+def carol_coach(page: Page, run: int, verify) -> None:
+    """Carol's partial official attempt: the coach shows only what she missed; practice is
+    checked but never changes the result, and she still cannot submit again."""
+    verify.get_by_role("button", name="Coach me on this attempt").click()
+    coach = verify.get_by_role(
+        "region", name="Learning Coach — practice does not change your result."
+    )
+    cards = coach.get_by_role("article")
+    expect(cards).to_have_count(1)
+    card = cards.first
+    line = "The ledger shows exactly one settlement for the order"
+    expect(card).to_contain_text("Not met")
+    expect(card.locator("blockquote")).to_have_text(line)
+    expect(card.get_by_role("link", name=re.compile("in the Library$"))).to_have_attribute(
+        "href", re.compile(r"^/library\?open=")
+    )
+    card.get_by_role("textbox").fill("Done means the ledger has exactly one settlement for it.")
+    card.get_by_role("button", name="Check").click()
+    expect(card.get_by_role("status")).to_contain_text("Covered.")
+    expect(coach.get_by_role("note")).to_have_text(
+        "Your official result for this assessment stands. Practice is for learning only."
+    )
+    expect(verify).not_to_contain_text("ritical")
+    expect(verify.get_by_role("button", name="Submit answer")).to_have_count(0)
+    expect(verify.get_by_role("button", name="Try again")).to_have_count(0)
+    no_horizontal_scroll(page, "Learning Coach", viewport=360)
+    shot(page, run, "4a-carol-coach")
+    # The score did not move.
+    expect(verify.get_by_text(re.compile(r"^Your score: \d+%"))).to_be_visible()
 
 
 def expert_sees_aliases(page: Page, run: int) -> None:

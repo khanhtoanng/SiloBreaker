@@ -177,7 +177,10 @@ describe("Learning coach on the exercise page", () => {
     vi.spyOn(api, "listExercises").mockResolvedValue([exercise(attempt("not_yet"))]);
     vi.spyOn(api, "getCoach").mockResolvedValue(coach);
     renderPanel();
+    expect(await screen.findAllByRole("button", { name: "Try again" })).toHaveLength(1);
     const region = await openCoach();
+    // Only the coach's Try again remains once the coach is open.
+    expect(screen.getAllByRole("button", { name: "Try again" })).toHaveLength(1);
     await userEvent.click(within(region).getByRole("button", { name: "Try again" }));
     expect(await screen.findByLabelText("Your answer")).toBeInTheDocument();
   });

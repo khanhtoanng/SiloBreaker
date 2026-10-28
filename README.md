@@ -23,6 +23,7 @@ Human approval is the boundary between system interpretation and approved knowle
 | Browser e2e of the signed-in flow across admin, expert and successor (`e2e/demo_flow.py`) | Done |
 | Successor selection: choose later, Suitability (fit), common assessment, Results (score, top, tie), admin decision, expert review; browser e2e (`e2e/selection_flow.py`) | Done |
 | Help Assistant: role-scoped help and cited answers from approved knowledge, assessment lock, offline by default | Done |
+| Learning Coach: after an assessed attempt, the approved line behind each missed criterion and uncounted practice, owner only, offline by default | Done |
 | Production hardening: HTTPS (`SB_SESSION_COOKIE_SECURE=true`), login rate limiting, password policy beyond length | Not done |
 
 ## Quick start / Chạy nhanh
@@ -98,13 +99,13 @@ and never seed them in a real deployment.
 ## Tests
 
 ```bash
-cd backend && pytest -q          # 189 tests against PostgreSQL (silobreaker_test)
+cd backend && pytest -q          # 207 tests against PostgreSQL (silobreaker_test)
 cd backend && ruff check app tests && ruff format --check app tests
-cd frontend && npm test          # 46 Vitest tests (jsdom)
+cd frontend && npm test          # 53 Vitest tests (jsdom)
 cd frontend && npm run build     # type-check + build
 pip install -e "backend[e2e]" && playwright install chromium
-python e2e/demo_flow.py --runs 3 # admin -> expert -> successor (+ Help Assistant) -> audit; API (seeded) and dev server running
-python e2e/selection_flow.py --runs 3 # choose later -> Suitability -> common assessment -> Results -> decision
+python e2e/demo_flow.py --runs 3 # admin -> expert -> successor (+ Help Assistant, Learning Coach) -> audit; API (seeded) and dev server running
+python e2e/selection_flow.py --runs 3 # choose later -> Suitability -> common assessment (+ Carol's Learning Coach) -> Results -> decision
 # If the Chromium download is blocked: SB_E2E_BROWSER_CHANNEL=chrome (or msedge) uses an installed browser
 ```
 
@@ -263,6 +264,54 @@ model.
 
 **No storage.** No table and no migration: chat history lives in React state and is gone on
 reload. Questions are not written to the audit log, the database or the logs.
+
+## Learning Coach
+
+After an assessed attempt that is not fully demonstrated, the learner's exercise page offers
+**Coach me on this attempt** under the result (`GET /api/attempts/{id}/coach`,
+`backend/app/coach/`). A demonstrated attempt shows *Nothing to fix in this attempt.* instead.
+The heading reads *Learning Coach — practice does not change your result.*
+
+**What it shows.** One card per criterion the learner did not fully meet (*Not met* or *Partly
+met*), in rubric order, using the effective verdicts (after an expert review, the reviewed ones):
+
+- the criterion text and *Your answer said:* with the assessor's quote, if any;
+- a fixed-template explanation: *Your answer did not cover: …* or *Your answer only partly
+  covered: …*, built from the criterion text only;
+- **Re-read in the approved knowledge**: the exact approved line the criterion was built from
+  (`resolve(approved_content, source_path)` on the exercise's own version), with a Library link;
+- a practice question with **Check** and **Try another wording**.
+
+At the bottom a successor gets **Try again** (a new attempt, as before). A candidate who has used
+the official attempt gets *Your official result for this assessment stands. Practice is for
+learning only.*
+
+**Hard rules.**
+
+- **Owner only.** The person comes from the session. Admins and the handoff's expert get 403
+  `not_attempt_owner` (the expert has the review flow); anyone else gets 404. Only after a
+  successful assessment; otherwise 409 `not_assessed`.
+- **No rubric leak.** The coach never returns `critical`, `source_path`, the field a line came
+  from, or wording that hints at importance; line ids are opaque positions (`L1`, `L2`, …).
+  Met criteria are only counted. Sources are a whitelist: the learner's own attempt and the
+  approved version the exercise was built from. Never drafts, other attempts, scores, fit,
+  aliases, the oracle, evidence or the audit log.
+- **Practice is not assessment.** `POST /api/coach/practice` (`X-Requested-With` required)
+  takes an opaque `practice_id`, HMAC-signed with `SB_COACH_SECRET` (demo default), that binds
+  the attempt and one line of its approved version. The answer (1–1000 characters) is checked by
+  the offline assessor against that line only and returns *met*, *partial* or *unmet* with fixed
+  feedback. Nothing is written: no attempt, review, score or selection change; `attempts_used`
+  is unchanged; practice text is never stored or logged.
+- **Audit.** The first open of the coach for an attempt writes one `coach.opened` event with the
+  attempt id and no text. Practice is not audited. No new tables, no migration.
+- **Offline by default; OpenAI optional.** With `SB_AI_PROVIDER=openai` the model may rephrase
+  an explanation from only the criterion text, the learner's answer and the approved line (with
+  its id). Code accepts it only if it cites exactly that line id, is at most two sentences and
+  avoids hinting words; otherwise, and on any timeout or error, every item uses the offline
+  template with `provider: "offline_fallback"`.
+
+Conflicts between the brief and the code, and how they were resolved, are in
+[`docs/LEARNING_COACH_PREWORK.md`](docs/LEARNING_COACH_PREWORK.md).
 
 ## Repository layout
 
