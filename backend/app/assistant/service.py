@@ -5,6 +5,9 @@ app.assistant.topics, and the approved knowledge versions /library lists. The as
 never reads drafts, exercise rubrics, attempts of anyone, evidence, the audit log or
 settings, and it stores nothing: the question is neither logged nor saved.
 
+Live data: a question that clearly matches one of app.assistant.intents gets mode "data", a
+read-only answer from app.assistant.live_data under the same visibility rule as the app.
+
 Assessment lock: while the user has a released exercise of their own still unanswered,
 knowledge questions get mode "locked", so the assistant cannot answer the exercise for them.
 """
@@ -12,10 +15,12 @@ knowledge questions get mode "locked", so the assistant cannot answer the exerci
 import logging
 import uuid
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.analysis.service import ai_limits, openai_client, require_openai
+from app.assistant import live_data
+from app.assistant.intents import detect_intent
 from app.assistant.retrieval import (
     KnowledgeHit,
     ReadableVersion,
@@ -24,7 +29,8 @@ from app.assistant.retrieval import (
     specificity,
     topic_allowed,
 )
-from app.assistant.topics import TOPICS
+from app.assistant.topics import LIVE_DATA_TOPIC, TOPICS
+from app.auth.deps import visible_handoffs
 from app.config import get_settings
 from app.errors import AppError
 from app.knowledge.service import library_versions
@@ -78,17 +84,9 @@ def role_context(session: Session, user: AppUser, handoff_id: str | None = None)
     pid = user.person_id
     if not pid:
         return set()
-    candidate_of = select(HandoffCandidate.handoff_id).where(HandoffCandidate.person_id == pid)
-    handoffs = session.scalars(
-        select(Handoff).where(
-            or_(
-                Handoff.expert_id == pid,
-                Handoff.successor_id == pid,
-                Handoff.id.in_(candidate_of),
-            )
-        )
-    ).all()
-    roles = {h.id: r for h in handoffs if (r := _role_in(h, pid)) is not None}
+    roles = {
+        h.id: r for h in visible_handoffs(session, user) if (r := _role_in(h, pid)) is not None
+    }
     try:
         wanted = uuid.UUID(handoff_id) if handoff_id else None
     except ValueError:
@@ -140,8 +138,11 @@ def suggestions(roles: set[str], page: str, exclude: str | None = None) -> list[
     matching route first, then role-specific ones, in curated order."""
 
     allowed = [t for t in TOPICS if t.id != exclude and topic_allowed(t, roles, page)]
+    # Topics pinned to this exact page (a role's home page) come first, whatever the role.
+    pinned = [t for t in allowed if page in t.pin_on]
+    rest = sorted((t for t in allowed if t not in pinned), key=lambda t: specificity(t, page))
     out: list[str] = []
-    for t in sorted(allowed, key=lambda t: specificity(t, page)):
+    for t in [*pinned, *rest]:
         if t.suggest not in out:
             out.append(t.suggest)
         if len(out) == SUGGESTIONS:
@@ -220,6 +221,12 @@ def answer(
 ) -> dict:
     roles = role_context(session, user, handoff_id)
     page = page if page.startswith("/") else ""
+    # Live data first, but only for a question that clearly asks for it. No model is called
+    # and the assessment lock is not consulted: these answers never contain knowledge.
+    intent = detect_intent(question)
+    if intent is not None:
+        text, citations = live_data.ANSWERS[intent](session, user)
+        return _out("data", text, citations, suggestions(roles, page, exclude=LIVE_DATA_TOPIC))
     topics = rank_topics(question, roles, page)
     best_topic = topics[0] if topics else None
     hit = rank_knowledge(question, readable_versions(session))

@@ -348,6 +348,10 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .assistant-answer p { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .assistant-answer .chip { font-size: 0.72rem; background: #fff; text-decoration: none; color: var(--ink); }
 .assistant-answer .chip-knowledge { color: var(--human); border-color: var(--human-bg); }
+.assistant-answer .chip-page { color: var(--accent); }
+.assistant-data-label { color: var(--muted); font-weight: 600; letter-spacing: 0.02em; }
+.assistant-rows { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.assistant-rows a { overflow-wrap: anywhere; }
 .assistant-locked { margin: 0; background: #eceae4; color: var(--muted); border-radius: 8px; padding: 8px 10px; font-size: 0.9rem; }
 .assistant-suggestions { display: flex; flex-wrap: wrap; gap: 6px; }
 .assistant-suggestions button { text-align: left; }

@@ -116,6 +116,62 @@ describe("HelpAssistant", () => {
     expect(await within(panel).findByRole("alert")).toHaveTextContent("question too long");
   });
 
+  it("shows a data answer with its label, one line per handoff, each with its own page link", async () => {
+    const data: AssistantAnswer = {
+      mode: "data",
+      answer: "2 handoffs you can see, newest first:\nAlice → successor not chosen · choosing a successor\nAlice → Bob · active",
+      citations: [
+        { kind: "page", id: "/admin/handoffs", title: "Alice → successor not chosen", link: "/admin/handoffs" },
+        { kind: "page", id: "/admin/handoffs", title: "Alice → Bob", link: "/admin/handoffs" },
+      ],
+      suggestions: ["What do I click next?", "Why is Webhooks capped at 60?", "What does No history mean?"],
+      provider: "offline",
+    };
+    vi.spyOn(api, "ask").mockResolvedValue(data);
+    renderAt("/admin");
+    const panel = await openPanel();
+    await userEvent.type(within(panel).getByRole("textbox", { name: "Your question" }), "Are there any handoffs?{Enter}");
+
+    expect(await within(panel).findByText("Live data · only what you can see")).toBeInTheDocument();
+    expect(within(panel).getByText("2 handoffs you can see, newest first:")).toBeInTheDocument();
+    const rows = within(panel).getAllByRole("listitem");
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "Alice → successor not chosen · choosing a successor",
+      "Alice → Bob · active",
+    ]);
+    for (const row of rows) expect(within(row).getByRole("link")).toHaveAttribute("href", "/admin/handoffs");
+    expect(within(panel).getByRole("link", { name: "Alice → Bob · active" })).toBeInTheDocument();
+  });
+
+  it("renders page citations as router links and an empty data answer as plain text", async () => {
+    vi.spyOn(api, "ask")
+      .mockResolvedValueOnce({
+        mode: "data",
+        answer: "Waiting for you:\nAnswer the exercise “Settlement recovery” (knowledge v1)",
+        citations: [{ kind: "page", id: "/learn/exercises/e1", title: "Settlement recovery", link: "/learn/exercises/e1" }],
+        suggestions: ["Why can't I submit?", "Can I try again?", "What do I click next?"],
+        provider: "offline",
+      })
+      .mockResolvedValueOnce({
+        mode: "data",
+        answer: "You are not part of any handoff yet.",
+        citations: [],
+        suggestions: ["Why can't I submit?", "Can I try again?", "What do I click next?"],
+        provider: "offline",
+      });
+    renderAt("/learn");
+    const panel = await openPanel();
+    const box = within(panel).getByRole("textbox", { name: "Your question" });
+    await userEvent.type(box, "What is waiting for me?{Enter}");
+    const link = await within(panel).findByRole("link", { name: "Answer the exercise “Settlement recovery” (knowledge v1)" });
+    expect(link).toHaveAttribute("href", "/learn/exercises/e1");
+
+    await userEvent.type(box, "Are there any handoffs?{Enter}");
+    expect(await within(panel).findByText("You are not part of any handoff yet.")).toBeInTheDocument();
+    expect(within(panel).getAllByText("Live data · only what you can see")).toHaveLength(2);
+    expect(within(panel).getAllByRole("listitem")).toHaveLength(1); // only the first answer has rows
+  });
+
   it("sends a handoff id only on handoff routes", () => {
     expect(handoffIdOf("/admin/handoffs/abc")).toBe("abc");
     expect(handoffIdOf("/expert/handoffs/abc/detect")).toBe("abc");
