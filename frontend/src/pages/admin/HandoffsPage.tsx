@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../api";
 import ErrorNotice from "../../components/ErrorNotice";
 import { useLoad } from "../../hooks";
+import type { HandoffStatus } from "../../types";
 
 // FR-04: the four coverage states mean different things for the signals computed from them.
 const SOURCE_STATE_HELP: Record<string, string> = {
@@ -10,6 +11,14 @@ const SOURCE_STATE_HELP: Record<string, string> = {
   incomplete: "imported, but the export is known to be partial; signals that depend on it are unknown",
   excluded: "deliberately left out of this bundle",
   unavailable: "not supplied; signals that depend on it are unknown",
+};
+
+const CHOOSE_LATER = "__later__";
+
+const STATUS_LABEL: Record<HandoffStatus, string> = {
+  unassigned: "choose successor later",
+  selecting: "common assessment",
+  active: "active",
 };
 
 export default function HandoffsPage() {
@@ -38,6 +47,7 @@ export default function HandoffsPage() {
   useEffect(() => {
     if ((!successor || successor === expert) && successors.length) setSuccessor(successors[0].person_id!);
   }, [successors, successor, expert]);
+  const later = successor === CHOOSE_LATER;
 
   const run = async (label: string, fn: () => Promise<void>) => {
     setBusy(label);
@@ -54,7 +64,12 @@ export default function HandoffsPage() {
   const create = (e: FormEvent) => {
     e.preventDefault();
     run("Creating handoff", async () => {
-      await api.createHandoff({ bundle_id: data!.bundle.id, expert_id: expert, successor_id: successor });
+      await api.createHandoff({
+        bundle_id: data!.bundle.id,
+        expert_id: expert,
+        // Unassigned: the successor is chosen later through Suitability and an assessment.
+        ...(later ? {} : { successor_id: successor }),
+      });
       await reload();
     });
   };
@@ -130,6 +145,7 @@ export default function HandoffsPage() {
             <label className="field">
               <span>Successor (any active member)</span>
               <select value={successor} onChange={(e) => setSuccessor(e.target.value)}>
+                <option value={CHOOSE_LATER}>Choose successor later</option>
                 {successors.map((m) => (
                   <option key={m.id} value={m.person_id!}>
                     {m.display_name ?? m.username}
@@ -153,11 +169,11 @@ export default function HandoffsPage() {
             <li key={h.id} className="card-row">
               <div>
                 <strong>
-                  {name(h.expert_id)} → {name(h.successor_id)}
+                  {name(h.expert_id)} → {h.successor_id ? name(h.successor_id) : "successor not chosen"}
                 </strong>
                 <span className="muted small">
                   {" "}
-                  · {h.project_key}
+                  · {STATUS_LABEL[h.status ?? "active"]} · {h.project_key}
                   {h.created_at && ` · ${new Date(h.created_at).toLocaleString()}`}
                 </span>
               </div>
@@ -168,6 +184,11 @@ export default function HandoffsPage() {
                 <Link className="button ghost small" to={`/expert/handoffs/${h.id}/detect`}>
                   View results
                 </Link>
+                {(h.status !== "active" || !!h.candidates?.length) && (
+                  <Link className="button secondary small" to={`/admin/handoffs/${h.id}`}>
+                    {h.status === "active" ? "Selection" : "Choose successor"}
+                  </Link>
+                )}
               </div>
             </li>
           ))}

@@ -31,6 +31,7 @@ from app.verify.contract import (
 )
 from app.verify.offline import OfflineAssessor, OfflineGenerator
 from app.verify.rules import aggregate
+from app.verify.selection import check_can_attempt, check_can_reassess
 
 
 def _openai_call():
@@ -84,6 +85,8 @@ def role(handoff: Handoff, viewer: str | None) -> str:
         return "expert"
     if viewer and viewer == handoff.successor_id:
         return "successor"
+    if handoff.candidate(viewer) is not None:
+        return "successor"
     raise AppError(403, "not_participant", "viewer is not the expert or successor of this handoff")
 
 
@@ -92,7 +95,7 @@ def _require(handoff: Handoff, actor: str, wanted: str) -> None:
         raise AppError(403, f"not_{wanted}", f"only the handoff's {wanted} may do this")
 
 
-def _require_live(session: Session, version: KnowledgeVersion, finding: Finding) -> None:
+def require_live(session: Session, version: KnowledgeVersion, finding: Finding) -> None:
     if finding.status != "confirmed":
         raise AppError(
             409, "invalid_transition", f"knowledge of a {finding.status} finding cannot be tested"
@@ -135,7 +138,7 @@ def create_exercise(
 ) -> Exercise:
     finding, handoff = version_context(session, version)
     _require(handoff, actor, "expert")
-    _require_live(session, version, finding)
+    require_live(session, version, finding)
     generator = generator or get_generator()
     try:
         draft = generator.generate(finding.title, version.approved_content)
@@ -190,7 +193,7 @@ def approve_exercise(
     _check_revision(exercise, expected_revision)
     if exercise.status != "draft":
         raise AppError(409, "invalid_transition", f"exercise is already {exercise.status}")
-    _require_live(session, version, finding)
+    require_live(session, version, finding)
     exercise.status = "ready"
     exercise.approved_by = actor
     exercise.approved_at = datetime.now(UTC)
@@ -242,6 +245,7 @@ def submit_attempt(
             raise AppError(409, "operation_in_progress", f"operation is {existing.state}")
         return session.get(Attempt, existing.result_id), True
 
+    check_can_attempt(session, handoff, exercise, actor)
     attempt = Attempt(
         exercise_id=exercise.id, successor_id=actor, answer=answer, assessment_status="pending"
     )
@@ -274,6 +278,7 @@ def reassess_attempt(
         raise AppError(
             409, "invalid_transition", "this attempt is already assessed; submit a new attempt"
         )
+    check_can_reassess(session, handoff, attempt)
     op = Operation(
         handoff_id=handoff.id,
         kind="reassess",

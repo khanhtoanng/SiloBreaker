@@ -20,7 +20,15 @@ export default function ExpertHome() {
           <li key={h.id} className="card-row panel">
             <div>
               <strong>{h.project_key}</strong>
-              <span className="muted small"> · successor {h.successor_id}</span>
+              <span className="muted small">
+                {" "}
+                ·{" "}
+                {h.successor_id
+                  ? `successor ${h.successor_id}`
+                  : h.status === "selecting"
+                    ? `selecting among ${h.candidates?.map((c) => c.alias).join(", ") ?? "candidates"}`
+                    : "successor not chosen yet"}
+              </span>
             </div>
             <Link className="button small" to={`/expert/handoffs/${h.id}/detect`}>
               Open Detect

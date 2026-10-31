@@ -71,7 +71,12 @@ export default function DetectPage() {
           <p className="eyebrow">Step 1 · Detect · {handoff.project_key}</p>
           <h2 id="detect-title">Candidate knowledge gaps</h2>
           <p className="muted small">
-            {name(handoff.expert_id)} → {name(handoff.successor_id)}
+            {name(handoff.expert_id)} →{" "}
+            {handoff.successor_id
+              ? name(handoff.successor_id)
+              : handoff.status === "selecting"
+                ? "successor being selected"
+                : "successor not chosen yet"}
           </p>
         </div>
         {bundle && (

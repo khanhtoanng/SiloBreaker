@@ -2,13 +2,14 @@
 account's person_id; it is never read from a request body or query string."""
 
 from fastapi import Depends, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import service
 from app.config import get_settings
 from app.db import tx
 from app.errors import AppError
-from app.models import AppUser, Handoff
+from app.models import AppUser, Handoff, HandoffCandidate
 
 
 def session_token(request: Request) -> str | None:
@@ -38,7 +39,8 @@ def actor_label(user: AppUser) -> str:
 def handoff_role(user: AppUser, handoff: Handoff) -> str:
     """'admin', 'expert' or 'successor'. Anyone else is refused.
 
-    An admin is never a participant, even if the account also carries a person_id.
+    An admin is never a participant, even if the account also carries a person_id. While a
+    handoff is selecting, every candidate acts as a successor (own attempts only).
     """
     if user.role == "admin":
         return "admin"
@@ -46,7 +48,25 @@ def handoff_role(user: AppUser, handoff: Handoff) -> str:
         return "expert"
     if user.person_id and user.person_id == handoff.successor_id:
         return "successor"
+    if handoff.candidate(user.person_id) is not None:
+        return "successor"
     raise AppError(403, "not_participant", "you are not the expert or successor of this handoff")
+
+
+def visible_handoffs(session: Session, user: AppUser) -> list[Handoff]:
+    """Every handoff this user may open, newest first: all of them for an admin; for a member
+    the ones they are the expert or successor of, and selecting handoffs they are a candidate
+    of. The one visibility rule shared by GET /api/handoffs and the help assistant."""
+    stmt = select(Handoff).order_by(Handoff.created_at.desc())
+    if user.role != "admin":
+        pid = user.person_id or ""
+        candidate_of = select(HandoffCandidate.handoff_id).where(HandoffCandidate.person_id == pid)
+        stmt = stmt.where(
+            (Handoff.expert_id == pid)
+            | (Handoff.successor_id == pid)
+            | ((Handoff.status == "selecting") & Handoff.id.in_(candidate_of))
+        )
+    return list(session.scalars(stmt))
 
 
 def require_handoff_role(user: AppUser, handoff: Handoff, *allowed: str) -> str:

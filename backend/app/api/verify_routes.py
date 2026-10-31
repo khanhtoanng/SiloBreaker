@@ -15,6 +15,7 @@ from app.db import tx
 from app.errors import AppError
 from app.models import AppUser, Attempt, Exercise, Handoff, KnowledgeVersion, Operation
 from app.operations import run_idempotent
+from app.verify import selection as Sel
 from app.verify import service as V
 from app.verify.contract import Criterion, ExerciseDraft
 
@@ -28,12 +29,33 @@ def _attempts(session: Session, exercise: Exercise, viewer_role: str, viewer: Ap
     return list(session.scalars(stmt.order_by(Attempt.created_at)).all())
 
 
+def _attempt_extras(
+    session: Session, attempt: Attempt, exercise: Exercise, handoff: Handoff, viewer_role: str
+) -> dict:
+    """Review, effective result and, for the expert of a selecting handoff, the alias that
+    stands in for the learner's identity."""
+    review = Sel.review_of(session, attempt)
+    label = None
+    if viewer_role == "expert" and handoff.status == "selecting":
+        c = next(c for c in handoff.candidates if c.person_id == attempt.successor_id)
+        label = c.alias
+    return {
+        "label": label,
+        "review": review,
+        "effective_result": Sel.effective_result(attempt, exercise, review),
+        "score_pct": Sel.effective_score(attempt, exercise, review),
+    }
+
+
 def _exercise_view(session: Session, exercise: Exercise, user: AppUser) -> dict:
     version, _, handoff = V.exercise_context(session, exercise)
     r = handoff_role(user, handoff)
     if r == "successor" and exercise.status != "ready":
         raise AppError(403, "not_released", "this exercise has not been released yet")
-    return S.exercise_out(exercise, version, r, _attempts(session, exercise, r, user))
+    attempts = _attempts(session, exercise, r, user)
+    extras = {a.id: _attempt_extras(session, a, exercise, handoff, r) for a in attempts}
+    candidate = Sel.candidate_view(session, handoff, exercise, user.person_id)
+    return S.exercise_out(exercise, version, r, attempts, extras, candidate)
 
 
 def _attempt_view(session: Session, attempt: Attempt, user: AppUser) -> dict:
@@ -42,7 +64,9 @@ def _attempt_view(session: Session, attempt: Attempt, user: AppUser) -> dict:
     r = handoff_role(user, handoff)
     if r == "successor" and attempt.successor_id != user.person_id:
         raise AppError(403, "not_owner", "this attempt belongs to someone else")
-    return S.attempt_out(attempt, exercise, version, r)
+    return S.attempt_out(
+        attempt, exercise, version, r, **_attempt_extras(session, attempt, exercise, handoff, r)
+    )
 
 
 @router.post("/knowledge/{version_id}/exercises", status_code=201)
@@ -174,3 +198,37 @@ def get_operation(
     if op.handoff_id is not None:
         handoff_role(user, session.get(Handoff, op.handoff_id))
     return S.operation_out(op)
+
+
+@router.post("/attempts/{attempt_id}/review-request", status_code=201)
+def request_review(
+    attempt_id: str, session: Session = Depends(tx), user: AppUser = Depends(current_user)
+) -> dict:
+    """The learner who made an assessed attempt asks the expert to review it, once."""
+    a = _get(session, Attempt, attempt_id, "attempt")
+    handoff = V.exercise_context(session, session.get(Exercise, a.exercise_id))[2]
+    require_handoff_role(user, handoff, "successor")
+    Sel.request_review(session, a, handoff, user.person_id)
+    return _attempt_view(session, a, user)
+
+
+class AttemptReviewIn(BaseModel):
+    overrides: dict[str, str]  # checked in Sel.review_attempt: met, partial or unmet
+    reason: str = ""
+
+
+@router.post("/attempts/{attempt_id}/review")
+def review_attempt(
+    attempt_id: str,
+    body: AttemptReviewIn,
+    session: Session = Depends(tx),
+    user: AppUser = Depends(current_user),
+) -> dict:
+    """The expert overrides criterion verdicts with a reason. The attempt is not changed;
+    its effective result is recomputed by aggregate()."""
+    a = _get(session, Attempt, attempt_id, "attempt")
+    exercise = session.get(Exercise, a.exercise_id)
+    handoff = V.exercise_context(session, exercise)[2]
+    require_handoff_role(user, handoff, "expert")
+    Sel.review_attempt(session, a, exercise, handoff, body.overrides, body.reason, user.person_id)
+    return _attempt_view(session, a, user)

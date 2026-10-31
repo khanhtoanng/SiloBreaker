@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { displayName, useAuth } from "../auth";
 import type { Role } from "../types";
+import HelpAssistant from "./HelpAssistant";
 
 // Menus are a convenience only; the backend enforces every permission.
 export const MENU: Record<Role, { to: string; label: string }[]> = {
@@ -57,6 +58,7 @@ export default function Layout() {
       <main>
         <Outlet />
       </main>
+      <HelpAssistant />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import Layout from "./components/Layout";
 import AdminOverview from "./pages/admin/AdminOverview";
 import AuditPage from "./pages/admin/AuditPage";
 import HandoffsPage from "./pages/admin/HandoffsPage";
+import SelectionPage from "./pages/admin/SelectionPage";
 import UsersPage from "./pages/admin/UsersPage";
 import DetectPage from "./pages/expert/DetectPage";
 import ExercisePage from "./pages/expert/ExercisePage";
@@ -36,6 +37,7 @@ export function AppRoutes() {
         <Route path="admin" element={only(["admin"], <AdminOverview />)} />
         <Route path="admin/users" element={only(["admin"], <UsersPage />)} />
         <Route path="admin/handoffs" element={only(["admin"], <HandoffsPage />)} />
+        <Route path="admin/handoffs/:id" element={only(["admin"], <SelectionPage />)} />
         <Route path="admin/audit" element={only(["admin"], <AuditPage />)} />
         <Route path="expert" element={only(["member"], <ExpertHome />)} />
         {/* Admins may read Detect results after running an analysis; they cannot capture. */}

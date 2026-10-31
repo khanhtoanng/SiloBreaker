@@ -1,29 +1,49 @@
 """Signed-in overviews: my exercises and the approved-knowledge library."""
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.deps import current_user, handoff_role
 from app.db import tx
-from app.models import Analysis, AppUser, Attempt, Exercise, Finding, Handoff, KnowledgeVersion
+from app.knowledge.service import library_versions
+from app.models import (
+    Analysis,
+    AppUser,
+    Attempt,
+    Exercise,
+    Finding,
+    Handoff,
+    HandoffCandidate,
+    KnowledgeVersion,
+)
 
 router = APIRouter(prefix="/api", dependencies=[Depends(current_user)])
 
 
 @router.get("/me/exercises")
 def my_exercises(session: Session = Depends(tx), user: AppUser = Depends(current_user)) -> list:
-    """Exercises in handoffs I take part in. As successor I see released ones only, and only
-    my own attempts; the rubric is never part of this list."""
+    """Exercises in handoffs I take part in. As successor (or candidate of a selecting
+    handoff) I see released ones only, and only my own attempts; the rubric is never part of
+    this list."""
     if not user.person_id:
         return []
+    candidate_of = select(HandoffCandidate.handoff_id).where(
+        HandoffCandidate.person_id == user.person_id
+    )
     rows = session.execute(
         select(Exercise, KnowledgeVersion, Finding, Handoff)
         .join(KnowledgeVersion, Exercise.knowledge_version_id == KnowledgeVersion.id)
         .join(Finding, KnowledgeVersion.finding_id == Finding.id)
         .join(Analysis, Finding.analysis_id == Analysis.id)
         .join(Handoff, Analysis.handoff_id == Handoff.id)
-        .where(or_(Handoff.expert_id == user.person_id, Handoff.successor_id == user.person_id))
+        .where(
+            or_(
+                Handoff.expert_id == user.person_id,
+                Handoff.successor_id == user.person_id,
+                (Handoff.status == "selecting") & Handoff.id.in_(candidate_of),
+            )
+        )
         .order_by(Exercise.created_at.desc())
     ).all()
     out = []
@@ -65,24 +85,6 @@ def my_exercises(session: Session = Depends(tx), user: AppUser = Depends(current
 def library(session: Session = Depends(tx)) -> list:
     """The newest approved version of every confirmed finding. Readable by everyone signed in;
     obsolete (retired) knowledge is left out."""
-    newest = (
-        select(KnowledgeVersion.finding_id, func.max(KnowledgeVersion.version_no).label("n"))
-        .group_by(KnowledgeVersion.finding_id)
-        .subquery()
-    )
-    rows = session.execute(
-        select(KnowledgeVersion, Finding, Handoff)
-        .join(
-            newest,
-            (KnowledgeVersion.finding_id == newest.c.finding_id)
-            & (KnowledgeVersion.version_no == newest.c.n),
-        )
-        .join(Finding, KnowledgeVersion.finding_id == Finding.id)
-        .join(Analysis, Finding.analysis_id == Analysis.id)
-        .join(Handoff, Analysis.handoff_id == Handoff.id)
-        .where(Finding.status == "confirmed")
-        .order_by(KnowledgeVersion.approved_at.desc())
-    ).all()
     return [
         {
             "version_id": str(v.id),
@@ -95,5 +97,5 @@ def library(session: Session = Depends(tx)) -> list:
             "approved_by": v.approved_by,
             "approved_at": v.approved_at,
         }
-        for v, f, h in rows
+        for v, f, h in library_versions(session)
     ]

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "../api";
 import type { AggregateResult, Attempt, Criterion, Exercise, HandoffRole, Verdict } from "../types";
 import ErrorNotice from "./ErrorNotice";
+import LearningCoach from "./LearningCoach";
 
 // Labels only. Every verdict and result comes from the backend; nothing is scored here.
 const RESULT_LABEL: Record<AggregateResult, string> = {
@@ -28,9 +29,22 @@ export type VerifyPanelProps = {
   // The view the page expects before any exercise exists. Once one exists, the backend's
   // viewer_role for the signed-in account decides (expert, successor or read-only admin).
   expectedRole: HandoffRole;
+  // Show this exercise of the version (e.g. a common assessment) instead of the newest.
+  exerciseId?: string;
+  // Called after a candidate records opening the study material, to show the knowledge.
+  onOpenKnowledge?: () => void;
+  // Offer the learning coach under the latest assessed attempt (the learner's exercise page).
+  coach?: boolean;
 };
 
-export default function VerifyPanel({ versionId, versionNo, expectedRole }: VerifyPanelProps) {
+export default function VerifyPanel({
+  versionId,
+  versionNo,
+  expectedRole,
+  exerciseId,
+  onOpenKnowledge,
+  coach = false,
+}: VerifyPanelProps) {
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -39,9 +53,10 @@ export default function VerifyPanel({ versionId, versionNo, expectedRole }: Veri
 
   const load = useCallback(async () => {
     const list = await api.listExercises(versionId);
-    setExercise(list.length ? list[list.length - 1] : null);
+    const chosen = exerciseId ? list.find((e) => e.id === exerciseId) : undefined;
+    setExercise(chosen ?? (list.length ? list[list.length - 1] : null));
     setLoaded(true);
-  }, [versionId]);
+  }, [versionId, exerciseId]);
 
   useEffect(() => {
     setLoaded(false);
@@ -102,6 +117,9 @@ export default function VerifyPanel({ versionId, versionNo, expectedRole }: Veri
           onApprove={() =>
             run("Releasing exercise", () => api.approveExercise(exercise!.id, { expected_revision: exercise!.revision! }))
           }
+          onReview={(attemptId, overrides, reason) =>
+            run("Saving the review", () => api.reviewAttempt(attemptId, { overrides, reason }))
+          }
         />
       )}
 
@@ -109,8 +127,16 @@ export default function VerifyPanel({ versionId, versionNo, expectedRole }: Veri
         <SuccessorView
           exercise={exercise}
           busy={!!busy}
+          coach={coach}
           onSubmit={(answer) => run("Assessing your answer", () => api.submitAttempt(exercise!.id, { answer }))}
           onReassess={(attemptId) => run("Re-assessing", () => api.reassess(attemptId))}
+          onRequestReview={(attemptId) => run("Requesting a review", () => api.requestReview(attemptId))}
+          onReadKnowledge={() =>
+            run("Opening the approved knowledge", async () => {
+              await api.studyOpened(exercise!.candidate!.handoff_id);
+              onOpenKnowledge?.();
+            })
+          }
         />
       )}
     </section>
@@ -124,6 +150,7 @@ function ExpertView({
   onGenerate,
   onSave,
   onApprove,
+  onReview,
 }: {
   exercise: Exercise | null;
   busy: boolean;
@@ -131,6 +158,7 @@ function ExpertView({
   onGenerate: () => void;
   onSave: (scenario: string, criteria: Criterion[]) => void;
   onApprove: () => void;
+  onReview: (attemptId: string, overrides: Record<string, Verdict>, reason: string) => void;
 }) {
   const [scenario, setScenario] = useState("");
   const [criteria, setCriteria] = useState<Criterion[]>([]);
@@ -155,6 +183,7 @@ function ExpertView({
     );
 
   const editable = exercise.status === "draft" && !readOnly;
+  const waiting = exercise.attempts.filter((a) => a.review && !a.review.reviewed_at);
   const patch = (i: number, p: Partial<Criterion>) => {
     setCriteria((cs) => cs.map((c, j) => (j === i ? { ...c, ...p } : c)));
     setDirty(true);
@@ -220,11 +249,19 @@ function ExpertView({
           </button>
         </div>
       )}
+      {!readOnly && waiting.length > 0 && (
+        <section className="attempts" aria-labelledby="review-queue-title">
+          <h3 id="review-queue-title">Review requests ({waiting.length})</h3>
+          {waiting.map((a) => (
+            <ReviewForm key={a.id} attempt={a} busy={busy} onSave={(o, r) => onReview(a.id, o, r)} />
+          ))}
+        </section>
+      )}
       {exercise.attempts.length > 0 && (
         <div className="attempts">
           <h3>Successor attempts</h3>
           {exercise.attempts.map((a, i) => (
-            <AttemptCard key={a.id} attempt={a} index={i + 1} showCritical />
+            <AttemptCard key={a.id} attempt={a} index={i + 1} showCritical showLearner />
           ))}
         </div>
       )}
@@ -232,67 +269,188 @@ function ExpertView({
   );
 }
 
+/** The expert's answer to a review request: new verdicts for some criteria and a reason.
+ * The backend recomputes the result; the original attempt is never changed. */
+function ReviewForm({
+  attempt: a,
+  busy,
+  onSave,
+}: {
+  attempt: Attempt;
+  busy: boolean;
+  onSave: (overrides: Record<string, Verdict>, reason: string) => void;
+}) {
+  const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
+  const [reason, setReason] = useState("");
+  const results = a.results ?? [];
+  const overrides = Object.fromEntries(
+    Object.entries(verdicts).filter(([cid, v]) => results.find((r) => r.criterion_id === cid)?.verdict !== v),
+  );
+  const changed = Object.keys(overrides).length > 0;
+
+  return (
+    <form
+      className="attempt review-form"
+      aria-label={`Review of ${a.successor_id}`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (changed && reason.trim()) onSave(overrides, reason.trim());
+      }}
+    >
+      <strong>{a.successor_id} asked for a review</strong>
+      <details>
+        <summary>Answer</summary>
+        <p className="answer">{a.answer}</p>
+      </details>
+      {results.map((r) => (
+        <label key={r.criterion_id} className="field">
+          <span>
+            Verdict for {r.criterion_id}
+            {r.critical ? " (critical)" : ""}: {r.text}
+          </span>
+          <select
+            value={verdicts[r.criterion_id] ?? r.verdict}
+            onChange={(e) => setVerdicts((v) => ({ ...v, [r.criterion_id]: e.target.value as Verdict }))}
+          >
+            {r.verdict === "uncertain" && <option value="uncertain">Unclear (assessor)</option>}
+            <option value="met">Met</option>
+            <option value="partial">Partly met</option>
+            <option value="unmet">Not met</option>
+          </select>
+        </label>
+      ))}
+      <label className="field">
+        <span>Reason for the change (required)</span>
+        <textarea rows={2} required value={reason} onChange={(e) => setReason(e.target.value)} />
+      </label>
+      <button type="submit" disabled={busy || !changed || !reason.trim()}>
+        Save review
+      </button>
+    </form>
+  );
+}
+
 function SuccessorView({
   exercise,
   busy,
+  coach,
   onSubmit,
   onReassess,
+  onRequestReview,
+  onReadKnowledge,
 }: {
   exercise: Exercise | null;
   busy: boolean;
+  coach: boolean;
   onSubmit: (answer: string) => void;
   onReassess: (attemptId: string) => void;
+  onRequestReview: (attemptId: string) => void;
+  onReadKnowledge: () => void;
 }) {
   const [answer, setAnswer] = useState("");
   const [answering, setAnswering] = useState(true);
+  // While the coach is open it offers Try again itself, so the row below does not repeat it.
+  const [coaching, setCoaching] = useState(false);
   const attempts = exercise?.attempts ?? [];
   const last: Attempt | undefined = attempts[attempts.length - 1];
+  const candidate = exercise?.candidate ?? null;
+  // Every limit comes from the backend: a candidate with no attempt left cannot submit.
+  const outOfAttempts = candidate !== null && candidate.attempts_left === 0;
 
   useEffect(() => {
     // Show the form until there is an attempt; afterwards show its result first.
-    setAnswering(attempts.length === 0);
+    setAnswering(attempts.length === 0 && !outOfAttempts);
     setAnswer("");
-  }, [exercise?.id, attempts.length]);
+    setCoaching(false);
+  }, [exercise?.id, attempts.length, outOfAttempts]);
 
   if (!exercise) return <p className="notice">The expert has not released an exercise yet.</p>;
 
+  const mustRead = candidate !== null && !candidate.study_opened;
+
   return (
     <div className="stack">
+      {candidate && (
+        <p className="candidate-banner" role="note">
+          You are one of {candidate.candidate_count} candidates · same exercise ·{" "}
+          {candidate.max_attempts === 1 ? "one official attempt" : `${candidate.max_attempts} official attempts`} ·{" "}
+          {candidate.due_at ? `due ${new Date(candidate.due_at).toLocaleString()}` : "no due date"} · results are
+          private
+        </p>
+      )}
+      {candidate && (
+        <div className="row gap-s wrap">
+          <button className={mustRead ? "" : "secondary"} disabled={busy} onClick={onReadKnowledge}>
+            Read the approved knowledge
+          </button>
+          {mustRead && <span className="muted small">Read it before you answer; Submit answer stays locked until then.</span>}
+        </div>
+      )}
       <blockquote className="question">
         <span className="truth truth-system">Scenario</span>
         {exercise.scenario}
       </blockquote>
-      {answering ? (
+      {answering && !outOfAttempts ? (
         <form
           className="stack"
           onSubmit={(e) => {
             e.preventDefault();
-            if (answer.trim()) onSubmit(answer);
+            if (answer.trim() && !mustRead) onSubmit(answer);
           }}
         >
           <label className="field">
             <span>Your answer</span>
             <textarea rows={6} value={answer} onChange={(e) => setAnswer(e.target.value)} />
           </label>
-          <button type="submit" disabled={busy || !answer.trim()}>
+          <button type="submit" disabled={busy || !answer.trim() || mustRead}>
             Submit answer
           </button>
         </form>
       ) : (
         last && (
           <>
-            <AttemptCard attempt={last} index={attempts.length} />
+            <AttemptCard attempt={last} index={attempts.length} showScore={candidate !== null} />
+            {coach &&
+              last.assessment_status === "succeeded" &&
+              ((last.effective_result ?? last.aggregate_result) === "demonstrated" ? (
+                <p className="muted small">Nothing to fix in this attempt.</p>
+              ) : (
+                <LearningCoach
+                  key={last.id}
+                  attemptId={last.id}
+                  onTryAgain={() => setAnswering(true)}
+                  onOpen={() => setCoaching(true)}
+                />
+              ))}
             {last.assessment_status === "failed" ? (
               <button className="secondary" disabled={busy} onClick={() => onReassess(last.id)}>
                 Assess again
               </button>
             ) : (
-              <button className="secondary" disabled={busy} onClick={() => setAnswering(true)}>
-                Try again
-              </button>
+              <div className="row gap-s wrap">
+                {last.assessment_status === "succeeded" && !last.review && (
+                  <button className="secondary" disabled={busy} onClick={() => onRequestReview(last.id)}>
+                    Request review
+                  </button>
+                )}
+                {!outOfAttempts && !coaching && (
+                  <button className="secondary" disabled={busy} onClick={() => setAnswering(true)}>
+                    Try again
+                  </button>
+                )}
+              </div>
             )}
           </>
         )
+      )}
+      {outOfAttempts && (
+        <p className="notice" role="status">
+          {!candidate!.is_assessment_exercise
+            ? "This exercise is not the common assessment; answer the one you were assigned."
+            : candidate!.closed
+              ? "The common assessment is closed."
+              : "You have used your official attempt. There is no further submission."}
+        </p>
       )}
       {attempts.length > 1 && (
         <details className="controls">
@@ -306,11 +464,30 @@ function SuccessorView({
   );
 }
 
-function AttemptCard({ attempt: a, index, showCritical = false }: { attempt: Attempt; index: number; showCritical?: boolean }) {
+
+function AttemptCard({
+  attempt: a,
+  index,
+  showCritical = false,
+  showLearner = false,
+  showScore = false,
+}: {
+  attempt: Attempt;
+  index: number;
+  showCritical?: boolean;
+  // Expert view: who answered (an alias while the successor is being selected).
+  showLearner?: boolean;
+  // Candidate view: the learner's own score, computed by the backend.
+  showScore?: boolean;
+}) {
+  const reviewed = a.review?.reviewed_at ? a.effective_result : null;
   return (
-    <article className="attempt" aria-label={`Attempt ${index}`}>
+    <article className="attempt" aria-label={showLearner ? `Attempt ${index} by ${a.successor_id}` : `Attempt ${index}`}>
       <header className="row between wrap">
-        <strong>Attempt {index}</strong>
+        <strong>
+          Attempt {index}
+          {showLearner && ` · ${a.successor_id}`}
+        </strong>
         <span className="muted small">
           on knowledge v{a.knowledge_version_no} · {new Date(a.created_at).toLocaleString()}
         </span>
@@ -324,6 +501,19 @@ function AttemptCard({ attempt: a, index, showCritical = false }: { attempt: Att
       {a.aggregate_result && (
         <p className={`result result-${a.aggregate_result}`} role="status">
           {RESULT_LABEL[a.aggregate_result]}
+        </p>
+      )}
+      {showScore && a.score_pct !== null && a.score_pct !== undefined && (
+        <p className="score-line">
+          Your score: <strong>{a.score_pct}%</strong>
+          {reviewed ? " (after expert review)" : ""}
+        </p>
+      )}
+      {a.review && (
+        <p className="small muted">
+          {a.review.reviewed_at
+            ? `Reviewed by the expert: ${reviewed ? RESULT_LABEL[reviewed] : ""}. Reason: ${a.review.reason}`
+            : "Review requested; waiting for the expert."}
         </p>
       )}
       {a.results && (

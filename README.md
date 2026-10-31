@@ -21,6 +21,10 @@ Human approval is the boundary between system interpretation and approved knowle
 | Authentication: argon2 passwords, server-side sessions (HttpOnly cookie), role-based authorization on every route, admin user management, audit log | Done |
 | Multi-page website: `/login`, `/admin/*`, `/expert/*`, `/learn/*`, `/library`; SVG score chart | Done |
 | Browser e2e of the signed-in flow across admin, expert and successor (`e2e/demo_flow.py`) | Done |
+| Successor selection: choose later, Suitability (fit), common assessment, Results (score, top, tie), admin decision, expert review; browser e2e (`e2e/selection_flow.py`) | Done |
+| Help Assistant: role-scoped help and cited answers from approved knowledge, live data under the app's visibility rules, assessment lock, offline by default | Done |
+| Learning Coach: after an assessed attempt, the approved line behind each missed criterion and uncounted practice, owner only, offline by default | Done |
+| Help Assistant agent on a local model (`SB_ASSISTANT_PROVIDER=local`): the model picks read-only tools, code runs them, checks citations and renders the facts; offline stays the default | Done; live-tested with the Llama app and Gemma 4 E4B on one machine, not with Ollama |
 | Production hardening: HTTPS (`SB_SESSION_COOKIE_SECURE=true`), login rate limiting, password policy beyond length | Not done |
 
 ## Quick start / Chạy nhanh
@@ -36,7 +40,7 @@ cd backend
 python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"            # add ,e2e for Playwright and ,ai for the OpenAI extractor
 alembic upgrade head
-python -m app.seed_users           # creates or updates the three demo accounts (safe to re-run)
+python -m app.seed_users           # creates or updates the five demo accounts (safe to re-run)
 uvicorn app.main:app --reload --port 8000
 
 # 3. Frontend on http://localhost:5173  (new terminal)
@@ -54,7 +58,7 @@ Optional dependency groups in `backend/pyproject.toml`:
 |---|---|---|
 | `dev` | pytest, httpx, ruff | always for development |
 | `e2e` | playwright | `pip install -e ".[dev,e2e]" && playwright install chromium` |
-| `ai` | openai | only when `SB_AI_PROVIDER=openai`; offline mode never imports it |
+| `ai` | openai | only when `SB_AI_PROVIDER=openai` or `SB_ASSISTANT_PROVIDER=local`; offline mode never imports it |
 
 Without Docker, use a local PostgreSQL (user/password `postgres/postgres`), create the
 `silobreaker` database and run `scripts/create-test-db.sql`.
@@ -68,7 +72,9 @@ and never seed them in a real deployment.
 |---|---|---|---|
 | `admin` | `Admin@123` | admin | none: creates the handoff, runs the analysis, reads the audit log |
 | `alice` | `Alice@123` | member | experienced engineer (expert), person `alice` in the evidence |
-| `bob` | `Bob@123` | member | successor, person `bob` |
+| `bob` | `Bob@123` | member | successor in the demo flow; candidate in the selection flow (person `bob`, in the evidence) |
+| `carol` | `Carol@123` | member | candidate, person `carol` (in the evidence) |
+| `minh` | `Minh@123` | member | candidate, person `minh` (new hire, not in the evidence) |
 
 - The successor can be a new hire from outside who does not appear in the evidence: any active
   member account will do. Only the expert must appear in the evidence.
@@ -88,16 +94,20 @@ and never seed them in a real deployment.
 3. Đăng nhập `bob` → **Learning** → mở bài tập (successor không thấy rubric), nộp câu trả lời, xem
    kết quả theo từng tiêu chí, **Try again** để nộp attempt mới.
 4. Đăng nhập `admin` → **Audit log** để xem hành động của cả ba người.
+5. Chọn người kế nhiệm: xem mục **Successor selection** bên dưới và cảnh 5 trong
+   [`docs/DEMO.md`](docs/DEMO.md).
 
 ## Tests
 
 ```bash
-cd backend && pytest -q          # 134 tests against PostgreSQL (silobreaker_test)
+cd backend && pytest -q          # 274 tests against PostgreSQL (silobreaker_test), 2 more skipped unless SB_ASSISTANT_LIVE=1
 cd backend && ruff check app tests && ruff format --check app tests
-cd frontend && npm test          # 29 Vitest tests (jsdom)
+# Optional, needs a local model server: SB_ASSISTANT_LIVE=1 SB_ASSISTANT_MODEL=<id> pytest -q -m local_model
+cd frontend && npm test          # 59 Vitest tests (jsdom)
 cd frontend && npm run build     # type-check + build
 pip install -e "backend[e2e]" && playwright install chromium
-python e2e/demo_flow.py --runs 3 # admin -> expert -> successor -> audit; API (seeded) and dev server running
+python e2e/demo_flow.py --runs 3 # admin -> expert -> successor (+ Help Assistant, Learning Coach) -> audit; API (seeded) and dev server running
+python e2e/selection_flow.py --runs 3 # choose later -> Suitability -> common assessment (+ Carol's Learning Coach) -> Results -> decision
 # If the Chromium download is blocked: SB_E2E_BROWSER_CHANNEL=chrome (or msedge) uses an installed browser
 ```
 
@@ -137,6 +147,9 @@ website hides what a role cannot do, but the backend checks every call again.
 | See released exercises and answer them | | | ✓ | |
 | See attempts and results | ✓ | ✓ | own only | |
 | Read approved knowledge and OKF (`/library`) | ✓ | ✓ | ✓ | ✓ |
+| Suitability, common assessment, Results, select the successor | ✓ | | | |
+| Request a review of an own assessed attempt | | | ✓ (and candidates) | |
+| Review an attempt (change verdicts with a reason) | | ✓ | | |
 
 Handoff rules: the expert must be an active member who appears in the evidence; the successor
 must be an active member but may be new to the project (an external hire); they must differ, and
@@ -144,6 +157,265 @@ an admin can be neither. A new member's `person_id` defaults to their username.
 
 Not yet done for production: HTTPS with `SB_SESSION_COOKIE_SECURE=true`, login rate limiting,
 and a password policy beyond the 8-character minimum.
+
+## Successor selection
+
+When the successor is not obvious, the administrator creates the handoff with **Choose successor
+later** (status `unassigned`), shortlists people on **Suitability**, runs one **common
+assessment**, compares **Results** and makes the decision. The system computes two numbers to
+support that decision. Neither number decides; the administrator always makes the final choice
+and it is recorded.
+
+### The two percentages
+
+| | Fit (Suitability tab) | Score (Results tab) |
+|---|---|---|
+| When | after an analysis, before any assessment | after the common assessment |
+| Question | has this person recovered incidents in this handoff's high-priority areas? | how much of the exercise did the answer cover? |
+| Input | cited events in the stored extraction of the latest analysis (resolver passed citation validation) | the assessor's criterion verdicts, with any expert review overrides applied |
+| Formula | Σ(review_priority × experience) / Σ review_priority × 100 over areas with `eligibility_status = ranked`; experience = 0 (never resolver), 0.5 (one incident), 1 (two or more) | Σ(weight × credit) / Σ weight × 100; weight 2 for a critical criterion, 1 otherwise; credit met 1, partial 0.5, unmet 0 |
+| Rounding | half up (`round_half_up`) | half up |
+| Demo values | Bob 20% (60 × 0.5 / 148), Carol 20%, Minh **No history — not 0%** | Bob 100%, Carol 86%, Minh 21% (offline assessor on the fixture answers) |
+| Used for | shortlisting only, never choosing | decision support |
+
+No history is not a score of zero: it means the evidence holds no cited recovery by that person
+in the ranked areas (for example a new hire). The page says so instead of drawing a 0% bar.
+
+### Top, tie and reasons
+
+1. Candidates who have not submitted, or whose result is `review_required`, are not ranked;
+   they appear in the warnings.
+2. The rest are ranked by `aggregate()` result first (demonstrated > partial > not_yet), then by
+   score inside the best group. **Top** is everyone with the highest score in the best group
+   among demonstrated and partial. A `not_yet` answer missed a critical condition and is never
+   top, whatever its score; it gets the badge *Missing a critical condition*.
+3. **Tie**: two or more people share the top. The badge says *Tie — admin decides*.
+4. If nobody reached demonstrated or partial, the top is empty and the warning
+   `no_candidate_meets_all_critical` is shown. The admin can still choose, with a reason.
+5. Choosing anyone in the top needs no reason. Choosing anyone else needs one
+   (`422 reason_required`). A second decision is `409 already_selected`.
+6. `successor_selection` is append-only (a database trigger rejects UPDATE and DELETE). It keeps
+   the snapshot the decision was made against: `top_ids`, `tie`, `is_top`, the phase-1
+   `recommended` / `in_recommended`, the reason, who decided and when. `successor.selected`
+   goes to the audit log.
+
+### Rules of the common assessment
+
+- `POST /api/handoffs/{id}/assessment` (admin, `unassigned` handoff only): 2–4 distinct active
+  members, not the expert, not admins, who may be absent from the evidence; one **released**
+  exercise of this handoff; a due time in the future. Each candidate gets an alias
+  `Candidate A`–`D` (seeded shuffle, `SB_CANDIDATE_ALIAS_SEED`).
+- One official attempt per candidate. An attempt that failed because of a system error does
+  not count. A further attempt is `409 attempt_limit`; after the due time, `409 assessment_closed`;
+  another exercise, `409 not_assessment_exercise`.
+- A candidate must open the approved knowledge first (`POST /api/handoffs/{id}/study-opened`,
+  the **Read the approved knowledge** button); before that, `409 study_required`.
+- Results are private: a candidate sees only their own attempt and score (`403 not_owner`
+  otherwise). While selecting, the expert sees aliases, never names, in every attempt view.
+- A candidate may request one review of an assessed attempt; the expert changes criterion
+  verdicts with a required reason. The attempt is never changed; its effective result is
+  recomputed by `aggregate()` and its score by the formula above.
+- **Assign directly** (`POST /api/handoffs/{id}/assign`) skips the assessment when one person
+  is clearly right.
+- `GET /api/handoffs/{id}/suitability` and `GET /api/handoffs/{id}/readiness` are admin only.
+  Every number on both tabs comes from these endpoints; the browser never recomputes a score.
+
+### Limits
+
+- A score reflects one exercise on one knowledge area, not overall ability. Fit reflects only
+  what the supplied evidence records; work that left no cited trace counts as no history.
+- The offline assessor is a lexical matcher. A wrong verdict is corrected through review, not
+  by editing the attempt.
+- A handoff created with `candidate_ids` directly (phase 1 API, kept for compatibility) has no
+  due time and allows `max_attempts` = 2; the website uses the common assessment instead.
+
+## Help Assistant
+
+A **Help** button at the bottom right of every signed-in page opens the *SiloBreaker
+Assistant* (`POST /api/assistant/ask`, `backend/app/assistant/`). It has three modes:
+
+- **Help**: how to use the website and how its numbers work ("What do I click next?", "Why is
+  Webhooks capped at 60?", "What does No history mean?"). Answers come from about 30 curated
+  topics in `topics.py`, filtered by the signed-in user's role (admin, expert, successor,
+  candidate) and the current page. Every number in a topic is built from the constant the code
+  computes it with (`app.scoring.rules`, `app.verify.selection`).
+- **Knowledge**: answers from approved Knowledge Units only, as quoted approved lines
+  (preconditions, steps, stop-and-escalate, success checks) under fixed headings, with a
+  citation to the version that links to its Library entry. If nothing matches well enough
+  (named thresholds in `retrieval.py`), it says it does not know and points to the Library.
+- **Data**: read-only answers from the live database for four questions, labelled *Live data ·
+  only what you can see*. Each row links to the page this user may open for it.
+
+**Data mode.** `intents.py` detects the intent with the shared tokenizer and a small keyword
+table: a question must hit an anchor word, at least 75% of its words must belong to the intent,
+and it must not contain a blocker (score, top, answer, result, create, approve, …) or the words
+how, why or who. So *How do I create a handoff?* still gets the help topic, and *Who scored
+highest?* or *What did Carol answer?* are never data questions. Detection runs before help and
+knowledge ranking. `live_data.py` answers, starting from `visible_handoffs` in
+`app/auth/deps.py`, the same rule `GET /api/handoffs` uses:
+
+| Intent | Example | What each user sees |
+|---|---|---|
+| `list_handoffs` | *Are there any handoffs?* | One line per visible handoff, newest first: *Alice → Bob · active*, linked to `/admin/handoffs` (admin), the Detect page (expert) or `/learn` (successor, candidate). An admin with none: *There are no handoffs yet.* A member with none: *You are not part of any handoff yet.*, whether or not other handoffs exist. |
+| `handoff_status` | *What is the status of my handoff?* | Admin and expert: status, whether an analysis ran, approved versions, whether an exercise is released; the admin also sees *2 of 3 candidates submitted* while selecting. Successor and candidate: status, approved knowledge in the Library, whether an exercise is released; a candidate only *you are one of 3 candidates* and their own state (study opened, official attempt used, due time). |
+| `my_pending` | *What is waiting for me?* | Admin: handoffs without an analysis, closed assessments without a decision. Expert: findings to review, drafts not approved, approved versions without a released exercise, review requests (counts only). Successor and candidate: released exercises not answered yet, with the due time; the title only, never the scenario. Else *Nothing is waiting for you.* |
+| `my_due` | *When is my assessment due?* | A candidate: their due time and whether their official attempt is used. Anyone else: *You have no assessment with a due time.* |
+
+Non-admins never see other people's scores, fit, verdicts, answers, attempt counts or aliases;
+nobody sees rubrics, drafts, evidence text, the audit log or passwords. Data answers never call a
+model (`provider` is always `"offline"`, even with `SB_AI_PROVIDER=openai`), never unlock
+knowledge answers, and are not stored or audited. (This describes the offline path; for the
+optional local agent see below.) *What is waiting for me?* is suggested first
+on every home page (`/`, `/admin`, `/expert`, `/learn`). Conflicts between the brief and the code
+are in [`docs/ASSISTANT_LIVE_DATA_PREWORK.md`](docs/ASSISTANT_LIVE_DATA_PREWORK.md).
+
+**Sources whitelist.** Only the curated topics, the approved versions `/library` lists
+(`knowledge.service.library_versions`, the same rule) and, in data mode, the rows the user can
+already open. Never drafts, exercise rubrics, oracle
+fixtures, anyone's attempts, scores, fit or aliases, evidence chunks, the audit log, passwords,
+sessions or settings. Who is asking comes from the session; a role or actor in the body is
+ignored. `POST` needs `X-Requested-With`, like every write.
+
+**Assessment lock.** While a user has a released exercise of their own still unanswered (a
+successor before their first counted attempt, or a candidate of an open common assessment before
+their official attempt), knowledge questions return `mode: "locked"` with *Knowledge answers are
+paused while you have an exercise to complete.* Help about the website still works; help topics
+never describe an exercise answer, its rubric or which criteria are critical.
+
+**Offline by default.** Retrieval is lexical, with the tokenizer and synonyms shared with the
+offline assessor (`app/lexical.py`): deterministic, no network, no key. With
+`SB_AI_PROVIDER=openai`, knowledge answers go to the model with only the retrieved lines, each
+with an id, under a prompt that treats them as data; code accepts the answer only when it cites
+at least one id and only ids it was given. Otherwise, and on any provider timeout or error, the
+offline answer is returned with `provider: "offline_fallback"`. Help answers never call the
+model.
+
+**No storage.** No table and no migration: chat history lives in React state and is gone on
+reload. Questions are not written to the audit log, the database or the logs.
+
+### AI agent (local model)
+
+Optional. The Help Assistant can run as an agent on a model on your own machine, so questions may
+be phrased freely, in English or Vietnamese. The model proposes, code decides: the model chooses
+which read-only tool to call, and code runs the tool, enforces permissions and renders every fact
+in the items the user sees. The model never writes SQL and never reaches the database, files or
+network. **Offline stays the default**, and **detection, exercise generation and assessment are
+unaffected**: they follow `SB_AI_PROVIDER`, so the demo numbers (88, 100/86/21) do not change.
+
+**Setup with the Llama app** ([llama.app](https://llama.app), OpenAI-compatible API on port 9931):
+
+1. Install it. Windows 11 and macOS: download the app. macOS also `brew install --cask llama-app`;
+   Windows command line `irm https://llama.app/install.ps1 | iex`; Linux (command line only)
+   `curl -LsSf https://llama.app/install.sh | sh`.
+2. In the app, choose a model that supports tool calling from the recommended list or **Browse
+   models**, and wait until the download has finished. A model that is still downloading is
+   already listed, but the server refuses to run it, so the assistant falls back.
+3. Find its exact id: `curl http://localhost:9931/v1/models`.
+4. `pip install -e ".[ai]"` and start the backend with the settings below.
+
+**Ollama** or another OpenAI-compatible server works by changing the settings only, for example
+`SB_ASSISTANT_BASE_URL=http://localhost:11434/v1`. No server-specific API is used.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `SB_ASSISTANT_PROVIDER` | `offline` | `local` turns the agent on |
+| `SB_ASSISTANT_BASE_URL` | `http://localhost:9931/v1` | The server (Llama) |
+| `SB_ASSISTANT_MODEL` | none | Required with `local`: the exact id at `GET {base_url}/models`. Missing or not listed: a WARNING says so, and the answer is offline |
+| `SB_ASSISTANT_API_KEY` | `local` | Dummy value; local servers ignore it |
+| `SB_ASSISTANT_MAX_TOOL_CALLS` | `4` | Tool calls per question, in total |
+| `SB_ASSISTANT_TIMEOUT_SECONDS` | `60` | Whole run, across all model calls |
+
+**Tools** (`backend/app/assistant/tools.py`), exactly these, all read-only:
+
+| Tool | Arguments | Runs |
+|---|---|---|
+| `list_handoffs` | none | `live_data.list_handoffs` |
+| `handoff_status` | `handoff_ref?` (an id or *expert→successor* label from a previous result) | `live_data.handoff_status`, filtered to that handoff |
+| `my_pending` | none | `live_data.my_pending` |
+| `my_due` | none | `live_data.my_due` |
+| `search_knowledge` | `query` (≤200) | `retrieval.rank_knowledge` over the versions `/library` lists; `locked` during the assessment lock |
+| `help_topics` | `query` (≤200) | `retrieval.rank_topics` for the user's roles and page |
+
+- No tool takes a user, role, person or actor: the executor binds the session user and page, and
+  extra arguments or an unknown tool name are rejected.
+- Tools reuse the v1.5 functions and `visible_handoffs`, so they show only what the app already
+  shows that user. A handoff the user cannot see is `not found`, never `forbidden`. No tool returns
+  rubrics, criteria, drafts, other people's answers, scores, fit, aliases, evidence, the audit log
+  or account data.
+- The assessment lock is enforced inside `search_knowledge`; no prompt wording can reach it.
+
+**Validation** (`backend/app/assistant/agent.py`, prompt `assistant-agent/1`). The model gets the
+system prompt and the question, no history. Its final reply must cite the ids of the items it used
+as `[id]`. Code rejects the reply if a cited id was not returned in this run, if it cites nothing
+although tools returned items, if no tool was called at all, or if it is a tool call written as
+text (never parsed into a call). What the user sees:
+
+- the model's short reply with the citations removed, then
+- the cited items, rendered by code in the v1.5 format with page links and knowledge citations, so
+  names, statuses, due dates and knowledge lines come from the database, then
+- the label *AI agent (local model) · tools: list_handoffs, my_pending*.
+
+The reply itself is the model's wording: code checks that its citations exist, not that the
+sentence is true. If the rendered item differs from the reply, the item is right. While the lock
+holds and nothing else is cited, no model text is shown at all.
+
+`mode` is `data`, `knowledge` or `help` by what was cited (in that order), `locked`, else `unknown`.
+Agent answers have `provider: "local"` and add `reply`, `sections` and `tools_used`.
+
+**Fallback.** If the server is unreachable or times out, the model is missing or not listed, the
+response or tool call is invalid, the limits are exceeded or the reply is rejected, the v1.5 offline
+answer is returned unchanged with `provider: "offline_fallback"` and the label *Offline answer*. The
+reason is logged at WARNING, without the question. The fallback never calls `SB_AI_PROVIDER`'s
+model. Nothing is stored. Findings from testing against a real server are in
+[`docs/ASSISTANT_AGENT_PREWORK.md`](docs/ASSISTANT_AGENT_PREWORK.md).
+
+## Learning Coach
+
+After an assessed attempt that is not fully demonstrated, the learner's exercise page offers
+**Coach me on this attempt** under the result (`GET /api/attempts/{id}/coach`,
+`backend/app/coach/`). A demonstrated attempt shows *Nothing to fix in this attempt.* instead.
+The heading reads *Learning Coach — practice does not change your result.*
+
+**What it shows.** One card per criterion the learner did not fully meet (*Not met* or *Partly
+met*), in rubric order, using the effective verdicts (after an expert review, the reviewed ones):
+
+- the criterion text and *Your answer said:* with the assessor's quote, if any;
+- a fixed-template explanation: *Your answer did not cover: …* or *Your answer only partly
+  covered: …*, built from the criterion text only;
+- **Re-read in the approved knowledge**: the exact approved line the criterion was built from
+  (`resolve(approved_content, source_path)` on the exercise's own version), with a Library link;
+- a practice question with **Check** and **Try another wording**.
+
+At the bottom a successor gets **Try again** (a new attempt, as before). A candidate who has used
+the official attempt gets *Your official result for this assessment stands. Practice is for
+learning only.*
+
+**Hard rules.**
+
+- **Owner only.** The person comes from the session. Admins and the handoff's expert get 403
+  `not_attempt_owner` (the expert has the review flow); anyone else gets 404. Only after a
+  successful assessment; otherwise 409 `not_assessed`.
+- **No rubric leak.** The coach never returns `critical`, `source_path`, the field a line came
+  from, or wording that hints at importance; line ids are opaque positions (`L1`, `L2`, …).
+  Met criteria are only counted. Sources are a whitelist: the learner's own attempt and the
+  approved version the exercise was built from. Never drafts, other attempts, scores, fit,
+  aliases, the oracle, evidence or the audit log.
+- **Practice is not assessment.** `POST /api/coach/practice` (`X-Requested-With` required)
+  takes an opaque `practice_id`, HMAC-signed with `SB_COACH_SECRET` (demo default), that binds
+  the attempt and one line of its approved version. The answer (1–1000 characters) is checked by
+  the offline assessor against that line only and returns *met*, *partial* or *unmet* with fixed
+  feedback. Nothing is written: no attempt, review, score or selection change; `attempts_used`
+  is unchanged; practice text is never stored or logged.
+- **Audit.** The first open of the coach for an attempt writes one `coach.opened` event with the
+  attempt id and no text. Practice is not audited. No new tables, no migration.
+- **Offline by default; OpenAI optional.** With `SB_AI_PROVIDER=openai` the model may rephrase
+  an explanation from only the criterion text, the learner's answer and the approved line (with
+  its id). Code accepts it only if it cites exactly that line id, is at most two sentences and
+  avoids hinting words; otherwise, and on any timeout or error, every item uses the offline
+  template with `provider: "offline_fallback"`.
+
+Conflicts between the brief and the code, and how they were resolved, are in
+[`docs/LEARNING_COACH_PREWORK.md`](docs/LEARNING_COACH_PREWORK.md).
 
 ## Repository layout
 
@@ -153,6 +425,7 @@ backend/
   app/analysis/    extraction contract, citation validation, offline extractor, Detect flow
   app/scoring/     deterministic signals, gates, caps, confidence (pure functions)
   app/knowledge/   review, drafts, approval, immutable versions, OKF renderer
+  app/assistant/   help assistant: curated topics, lexical retrieval, assessment lock, local-model agent and its tools
   app/auth/        password hashing, server-side sessions, login/logout, authorization dependencies
   app/api/         FastAPI routes (including admin users/audit, library, my exercises)
   app/seed_users.py  demo accounts (python -m app.seed_users)

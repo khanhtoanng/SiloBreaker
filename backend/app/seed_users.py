@@ -33,6 +33,21 @@ DEMO_USERS = [
         "person_id": "bob",
         "password": "Bob@123",
     },
+    {
+        "username": "carol",
+        "display_name": "Carol",
+        "role": "member",
+        "person_id": "carol",
+        "password": "Carol@123",
+    },
+    {
+        # A new hire: candidate for the successor role, absent from the evidence.
+        "username": "minh",
+        "display_name": "Minh",
+        "role": "member",
+        "person_id": "minh",
+        "password": "Minh@123",
+    },
 ]
 
 

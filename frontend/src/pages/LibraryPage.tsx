@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import ErrorNotice from "../components/ErrorNotice";
 import { useLoad } from "../hooks";
@@ -15,10 +16,18 @@ const SECTIONS: { key: Exclude<keyof KnowledgeContent, "applicability">; label: 
 
 export default function LibraryPage() {
   const { data, error, reload } = useLoad(() => api.library(), []);
-  const [open, setOpen] = useState<string | null>(null);
+  // ?open=<version id> opens one entry; ?back=/learn/... links back to the exercise.
+  const [params] = useSearchParams();
+  const [open, setOpen] = useState<string | null>(params.get("open"));
+  const back = params.get("back");
 
   return (
     <section className="stack" aria-labelledby="library-title">
+      {back?.startsWith("/learn/") && (
+        <Link className="small" to={back}>
+          ← Back to your exercise
+        </Link>
+      )}
       <h2 id="library-title">Knowledge library</h2>
       <p className="muted">Approved knowledge only. Retired knowledge is not listed.</p>
       <ErrorNotice error={error} onReload={reload} />

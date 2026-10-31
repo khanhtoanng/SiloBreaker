@@ -29,6 +29,7 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["local_model: needs a real local model server (set SB_ASSISTANT_LIVE=1)"]
 
 [tool.ruff]
 line-length = 100

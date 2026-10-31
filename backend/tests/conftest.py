@@ -61,7 +61,13 @@ def _restore_demo_users() -> None:
     engine.dispose()
 
 
-PASSWORDS = {"admin": "Admin@123", "alice": "Alice@123", "bob": "Bob@123"}
+PASSWORDS = {
+    "admin": "Admin@123",
+    "alice": "Alice@123",
+    "bob": "Bob@123",
+    "carol": "Carol@123",
+    "minh": "Minh@123",
+}
 
 
 def login_as(client, username: str, password: str | None = None):
@@ -81,7 +87,16 @@ def login_as(client, username: str, password: str | None = None):
 
 
 def create_member(client, username: str, password: str = "Member@123", **extra) -> dict:
-    """Creates a member account as admin and leaves the client signed in as admin."""
+    """Creates a member account as admin and leaves the client signed in as admin.
+
+    A seeded demo member (e.g. carol) already exists as a plain member, so it is returned
+    as is when no extra fields are asked for."""
+    from app.seed_users import DEMO_USERS
+
+    seeded = {u["username"]: u for u in DEMO_USERS}
+    if username in seeded and not extra and password == "Member@123":
+        login_as(client, "admin")
+        return {k: seeded[username][k] for k in ("username", "role", "person_id")}
     r = login_as(client, "admin").post(
         "/api/admin/users",
         json={"username": username, "role": "member", "password": password, **extra},

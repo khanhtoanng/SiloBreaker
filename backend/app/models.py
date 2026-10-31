@@ -93,13 +93,81 @@ class EvidenceChunk(Base):
 
 class Handoff(Base):
     __tablename__ = "handoff"
+    __table_args__ = (
+        CheckConstraint("status in ('unassigned','selecting','active')", name="ck_handoff_status"),
+        CheckConstraint(
+            "status in ('unassigned','selecting') or successor_id is not null",
+            name="ck_handoff_successor_when_active",
+        ),
+        CheckConstraint("max_attempts >= 1", name="ck_handoff_max_attempts"),
+    )
     id: Mapped[uuid.UUID] = _id()
     project_key: Mapped[str] = mapped_column(Text, nullable=False)
     bundle_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("evidence_bundle.id"), nullable=False)
     expert_id: Mapped[str] = mapped_column(Text, nullable=False)
-    successor_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # Null while 'unassigned' or 'selecting'; set by direct assignment or the admin's selection.
+    successor_id: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=2, server_default="2"
+    )
+    # Common assessment: the one released exercise every candidate answers, and its due time.
+    # use_alter breaks the handoff -> exercise -> ... -> handoff foreign-key cycle.
+    assessment_exercise_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("exercise.id", use_alter=True)
+    )
+    assessment_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assessment_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _now()
+
+    candidates: Mapped[list["HandoffCandidate"]] = relationship(
+        order_by="HandoffCandidate.alias", viewonly=True
+    )
+
+    def candidate(self, person_id: str | None) -> "HandoffCandidate | None":
+        """The candidate row for `person_id` while the successor is still being selected."""
+        if self.status != "selecting" or not person_id:
+            return None
+        return next((c for c in self.candidates if c.person_id == person_id), None)
+
+
+class HandoffCandidate(Base):
+    __tablename__ = "handoff_candidate"
+    __table_args__ = (
+        UniqueConstraint("handoff_id", "person_id"),
+        UniqueConstraint("handoff_id", "alias"),
+    )
+    id: Mapped[uuid.UUID] = _id()
+    handoff_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("handoff.id"), nullable=False)
+    person_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # "Candidate A".."Candidate D": what the expert sees while selecting.
+    alias: Mapped[str] = mapped_column(Text, nullable=False)
+    study_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SuccessorSelection(Base):
+    """Immutable. The admin's decision with the recommendation it was made against."""
+
+    __tablename__ = "successor_selection"
+    id: Mapped[uuid.UUID] = _id()
+    handoff_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("handoff.id"), nullable=False, unique=True
+    )
+    selected_person_id: Mapped[str] = mapped_column(Text, nullable=False)
+    recommended: Mapped[list] = mapped_column(JSONB, nullable=False)
+    in_recommended: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # Score-based top at decision time (phase 2). Null on rows decided before it existed.
+    top_ids: Mapped[list | None] = mapped_column(JSONB)
+    tie: Mapped[bool | None] = mapped_column(Boolean)
+    is_top: Mapped[bool | None] = mapped_column(Boolean)
+    reason: Mapped[str | None] = mapped_column(Text)
+    decided_by: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class Analysis(Base):
@@ -243,6 +311,24 @@ class Attempt(Base):
     assessment_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _now()
     assessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AttemptReview(Base):
+    """A learner's review request; the expert fills overrides, reason and reviewer once.
+    The attempt row is never changed: the effective result is derived from both."""
+
+    __tablename__ = "attempt_review"
+    id: Mapped[uuid.UUID] = _id()
+    attempt_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("attempt.id"), nullable=False, unique=True
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    overrides: Mapped[dict | None] = mapped_column(JSONB)
+    reason: Mapped[str | None] = mapped_column(Text)
+    reviewed_by: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Operation(Base):

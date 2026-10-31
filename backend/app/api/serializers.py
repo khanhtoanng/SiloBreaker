@@ -1,6 +1,7 @@
 from app.models import (
     Analysis,
     Attempt,
+    AttemptReview,
     EvidenceBundle,
     EvidenceChunk,
     EvidenceItem,
@@ -34,16 +35,31 @@ def bundle_out(
     }
 
 
-def handoff_out(h: Handoff) -> dict:
-    return {
+def handoff_out(h: Handoff, viewer: str | None = None) -> dict:
+    out = {
         "id": str(h.id),
         "project_key": h.project_key,
         "bundle_id": str(h.bundle_id),
         "expert_id": h.expert_id,
         "successor_id": h.successor_id,
         "status": h.status,
+        "max_attempts": h.max_attempts,
         "created_at": h.created_at,
     }
+    if viewer in FULL_VIEW and h.candidates:
+        # The expert sees aliases only until the admin has selected.
+        hide = viewer == "expert" and h.status == "selecting"
+        out["candidates"] = [
+            {"alias": c.alias}
+            if hide
+            else {
+                "alias": c.alias,
+                "person_id": c.person_id,
+                "study_opened_at": c.study_opened_at,
+            }
+            for c in h.candidates
+        ]
+    return out
 
 
 def contributions(signals: dict) -> dict:
@@ -194,17 +210,43 @@ def _results(attempt: Attempt, rubric: list[dict], expert: bool) -> list[dict] |
     return out
 
 
-def attempt_out(a: Attempt, exercise: Exercise, version: KnowledgeVersion, viewer: str) -> dict:
+def review_out(r: AttemptReview | None) -> dict | None:
+    if r is None:
+        return None
+    return {
+        "requested_at": r.requested_at,
+        "overrides": r.overrides,
+        "reason": r.reason,
+        "reviewed_by": r.reviewed_by,
+        "reviewed_at": r.reviewed_at,
+    }
+
+
+def attempt_out(
+    a: Attempt,
+    exercise: Exercise,
+    version: KnowledgeVersion,
+    viewer: str,
+    label: str | None = None,
+    review: AttemptReview | None = None,
+    effective_result: str | None = None,
+    score_pct: int | None = None,
+) -> dict:
+    """`label` replaces the learner's person_id (a candidate alias for the expert)."""
     out = {
         "id": str(a.id),
         "exercise_id": str(a.exercise_id),
         "knowledge_version_id": str(version.id),
         "knowledge_version_no": version.version_no,
-        "successor_id": a.successor_id,
+        "successor_id": label or a.successor_id,
         "answer": a.answer,
         "assessment_status": a.assessment_status,
         "assessment_error": a.assessment_error,
         "aggregate_result": a.aggregate_result,
+        "effective_result": effective_result or a.aggregate_result,
+        # Weighted criterion credit computed by app.verify.selection; null until assessed.
+        "score_pct": score_pct,
+        "review": review_out(review),
         "results": _results(a, exercise.rubric, viewer in FULL_VIEW),
         "created_at": a.created_at,
         "assessed_at": a.assessed_at,
@@ -215,8 +257,16 @@ def attempt_out(a: Attempt, exercise: Exercise, version: KnowledgeVersion, viewe
 
 
 def exercise_out(
-    e: Exercise, version: KnowledgeVersion, viewer: str, attempts: list[Attempt]
+    e: Exercise,
+    version: KnowledgeVersion,
+    viewer: str,
+    attempts: list[Attempt],
+    extras: dict | None = None,
+    candidate: dict | None = None,
 ) -> dict:
+    """`extras` maps an attempt id to the keyword arguments of attempt_out. `candidate` is the
+    viewer's own place in a successor selection (count, due time, attempts left)."""
+    extras = extras or {}
     out = {
         "id": str(e.id),
         "knowledge_version_id": str(version.id),
@@ -225,7 +275,8 @@ def exercise_out(
         "scenario": e.scenario,
         "approved_at": e.approved_at,
         "viewer_role": viewer,
-        "attempts": [attempt_out(a, e, version, viewer) for a in attempts],
+        "attempts": [attempt_out(a, e, version, viewer, **extras.get(a.id, {})) for a in attempts],
+        "candidate": candidate,
     }
     if viewer in FULL_VIEW:
         out |= {

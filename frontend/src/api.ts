@@ -1,10 +1,12 @@
 import type {
   AdminUser,
   Analysis,
+  AssistantAnswer,
   Attempt,
   AuditEvent,
   Bundle,
   Chunk,
+  Coach,
   Criterion,
   Draft,
   Exercise,
@@ -18,8 +20,13 @@ import type {
   LibraryEntry,
   MyExercise,
   Page,
+  PracticeResult,
+  Readiness,
   Role,
+  SelectionDecision,
+  Suitability,
   User,
+  Verdict,
 } from "./types";
 
 export class ApiError extends Error {
@@ -134,8 +141,21 @@ export const api = {
   // Handoffs and Detect
   handoffs: () => call<HandoffSummary[]>("GET", "/handoffs"),
   handoff: (id: string) => call<HandoffDetail>("GET", `/handoffs/${id}`),
-  createHandoff: (b: { bundle_id: string; expert_id: string; successor_id: string }) =>
+  // Without successor_id the handoff is "unassigned": the successor is chosen later.
+  createHandoff: (b: { bundle_id: string; expert_id: string; successor_id?: string }) =>
     call<Handoff>("POST", "/handoffs", b),
+
+  // Successor selection. Fit, scores, top and tie all come from the backend.
+  suitability: (handoffId: string) => call<Suitability>("GET", `/handoffs/${handoffId}/suitability`),
+  assignSuccessor: (handoffId: string, successorId: string) =>
+    call<Handoff>("POST", `/handoffs/${handoffId}/assign`, { successor_id: successorId }),
+  startAssessment: (handoffId: string, b: { candidate_ids: string[]; exercise_id: string; due_at: string }) =>
+    call<Handoff>("POST", `/handoffs/${handoffId}/assessment`, b),
+  readiness: (handoffId: string) => call<Readiness>("GET", `/handoffs/${handoffId}/readiness`),
+  selectSuccessor: (handoffId: string, b: { selected_person_id: string; reason?: string }) =>
+    call<SelectionDecision>("POST", `/handoffs/${handoffId}/selection`, b),
+  studyOpened: (handoffId: string) =>
+    call<{ handoff_id: string; alias: string; study_opened_at: string }>("POST", `/handoffs/${handoffId}/study-opened`),
   analyze: (handoffId: string, selected: string) =>
     call<Analysis>("POST", `/handoffs/${handoffId}/analyses`, { selected_engineer_id: selected }, true),
   getAnalysis: (id: string) => call<Analysis>("GET", `/analyses/${id}`),
@@ -168,4 +188,16 @@ export const api = {
     call<Attempt>("POST", `/exercises/${exerciseId}/attempts`, b, true),
   getAttempt: (id: string) => call<Attempt>("GET", `/attempts/${id}`),
   reassess: (id: string) => call<Attempt>("POST", `/attempts/${id}/reassess`),
+  requestReview: (id: string) => call<Attempt>("POST", `/attempts/${id}/review-request`),
+  reviewAttempt: (id: string, b: { overrides: Record<string, Verdict>; reason: string }) =>
+    call<Attempt>("POST", `/attempts/${id}/review`, b),
+
+  // Help assistant. Nothing is stored; who is asking comes from the session.
+  ask: (b: { question: string; page: string; handoff_id?: string }) =>
+    call<AssistantAnswer>("POST", "/assistant/ask", b),
+
+  // Learning coach. Only the attempt's owner; practice is never stored or counted.
+  getCoach: (attemptId: string) => call<Coach>("GET", `/attempts/${attemptId}/coach`),
+  checkPractice: (b: { practice_id: string; answer: string }) =>
+    call<PracticeResult>("POST", "/coach/practice", b),
 };

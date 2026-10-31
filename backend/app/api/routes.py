@@ -1,13 +1,16 @@
 import uuid
+from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.analysis.service import run_analysis
 from app.api import serializers as S
+from app.assistant import service as assistant
 from app.audit import audit
 from app.auth.deps import (
     actor_label,
@@ -15,7 +18,9 @@ from app.auth.deps import (
     handoff_role,
     require_admin,
     require_handoff_role,
+    visible_handoffs,
 )
+from app.coach import service as coach
 from app.config import get_settings
 from app.db import tx
 from app.errors import AppError
@@ -29,11 +34,15 @@ from app.models import (
     EvidenceBundle,
     EvidenceChunk,
     EvidenceItem,
+    Exercise,
     Finding,
     Handoff,
+    HandoffCandidate,
     KnowledgeVersion,
 )
 from app.operations import run_idempotent
+from app.verify import selection as Sel
+from app.verify import service as V
 
 router = APIRouter(prefix="/api")
 # Every route on `authed` requires a signed-in user. Finer checks (admin, handoff role)
@@ -101,9 +110,13 @@ def get_chunk(chunk_id: str, session: Session = Depends(tx)) -> dict:
 
 
 class HandoffIn(BaseModel):
+    """One successor (status 'active'), 2-4 candidates (status 'selecting'), or neither:
+    'unassigned', to choose later through Suitability and a common assessment."""
+
     bundle_id: str
     expert_id: str
-    successor_id: str
+    successor_id: str | None = None
+    candidate_ids: list[str] | None = None
 
 
 def _participant(session: Session, person_id: str, role: str) -> AppUser:
@@ -118,54 +131,83 @@ def _participant(session: Session, person_id: str, role: str) -> AppUser:
     return user
 
 
+def _pool_shape(expert_id: str, people: list[str]) -> None:
+    if not Sel.MIN_CANDIDATES <= len(people) <= Sel.MAX_CANDIDATES:
+        raise AppError(
+            422,
+            "candidate_count",
+            f"a pool needs {Sel.MIN_CANDIDATES}-{Sel.MAX_CANDIDATES} candidates",
+        )
+    if len(set(people)) != len(people):
+        raise AppError(422, "duplicate_candidate", "each candidate may appear once")
+    if expert_id in people:
+        raise AppError(422, "same_person", "expert and candidate must differ")
+
+
+def _learners(body: HandoffIn) -> tuple[list[str], str]:
+    """The successor, the candidate pool or nobody yet, checked before any account lookup."""
+    if body.successor_id is not None and body.candidate_ids is not None:
+        raise AppError(422, "successor_or_candidates", "give either successor_id or candidate_ids")
+    if body.successor_id is not None:
+        if body.expert_id == body.successor_id:
+            raise AppError(422, "same_person", "expert and successor must differ")
+        return [body.successor_id], "successor"
+    if body.candidate_ids is not None:
+        _pool_shape(body.expert_id, body.candidate_ids)
+        return body.candidate_ids, "candidate"
+    return [], "none"
+
+
 @authed.post("/handoffs", status_code=201)
 def create_handoff(
     body: HandoffIn, session: Session = Depends(tx), user: AppUser = Depends(require_admin)
 ) -> dict:
-    """The expert must appear in the evidence; the successor may be a new hire who does not."""
+    """The expert must appear in the evidence; the successor, or each candidate, may be a
+    new hire who does not."""
     bundle = _get(session, EvidenceBundle, body.bundle_id, "bundle")
-    if body.expert_id == body.successor_id:
-        raise AppError(422, "same_person", "expert and successor must differ")
+    learners, role = _learners(body)
     _participant(session, body.expert_id, "expert")
-    _participant(session, body.successor_id, "successor")
+    for pid in learners:
+        _participant(session, pid, role)
     if body.expert_id not in {p["id"] for p in _people(session, bundle.id)}:
         raise AppError(
             422, "unknown_person", f"expert '{body.expert_id}' does not appear in the bundle"
         )
+    selecting = role == "candidate"
     h = Handoff(
         project_key=bundle.project_key,
         bundle_id=bundle.id,
         expert_id=body.expert_id,
         successor_id=body.successor_id,
+        status={"candidate": "selecting", "successor": "active", "none": "unassigned"}[role],
     )
     session.add(h)
     session.flush()
-    audit(
-        session,
-        h.id,
-        actor_label(user),
-        "handoff.created",
-        "handoff",
-        h.id,
-        metadata={
-            "bundle_id": str(bundle.id),
-            "expert_id": h.expert_id,
-            "successor_id": h.successor_id,
-        },
-    )
-    return S.handoff_out(h)
+    metadata = {
+        "bundle_id": str(bundle.id),
+        "expert_id": h.expert_id,
+        "successor_id": h.successor_id,
+    }
+    if selecting:
+        aliases = Sel.assign_aliases(learners, get_settings().candidate_alias_seed)
+        session.add_all(
+            HandoffCandidate(handoff_id=h.id, person_id=pid, alias=aliases[pid]) for pid in learners
+        )
+        session.flush()
+        metadata["candidate_ids"] = learners
+    audit(session, h.id, actor_label(user), "handoff.created", "handoff", h.id, metadata=metadata)
+    return S.handoff_out(h, "admin")
 
 
 @authed.get("/handoffs")
 def list_handoffs(session: Session = Depends(tx), user: AppUser = Depends(current_user)) -> list:
-    """Admins see every handoff; members see the ones they take part in."""
-    stmt = select(Handoff).order_by(Handoff.created_at.desc())
-    if user.role != "admin":
-        pid = user.person_id or ""
-        stmt = stmt.where((Handoff.expert_id == pid) | (Handoff.successor_id == pid))
-    return [
-        S.handoff_out(h) | {"viewer_role": handoff_role(user, h)} for h in session.scalars(stmt)
-    ]
+    """Admins see every handoff; members see the ones they take part in, including selecting
+    handoffs they are a candidate of (app.auth.deps.visible_handoffs)."""
+    out = []
+    for h in visible_handoffs(session, user):
+        r = handoff_role(user, h)
+        out.append(S.handoff_out(h, r) | {"viewer_role": r})
+    return out
 
 
 @authed.get("/handoffs/{handoff_id}")
@@ -174,8 +216,19 @@ def get_handoff(
 ) -> dict:
     h = _get(session, Handoff, handoff_id, "handoff")
     r = handoff_role(user, h)
-    out = S.handoff_out(h) | {"viewer_role": r}
+    out = S.handoff_out(h, r) | {"viewer_role": r}
     if r == "successor":
+        candidate = h.candidate(user.person_id)
+        if candidate is not None:
+            out |= {
+                "alias": candidate.alias,
+                "study_opened_at": candidate.study_opened_at,
+                "candidate_count": len(h.candidates),
+                "assessment_exercise_id": str(h.assessment_exercise_id)
+                if h.assessment_exercise_id
+                else None,
+                "assessment_due_at": h.assessment_due_at,
+            }
         return out  # the successor works from released exercises, not from findings
     analyses = session.scalars(
         select(Analysis).where(Analysis.handoff_id == h.id).order_by(Analysis.created_at.desc())
@@ -190,6 +243,103 @@ def get_handoff(
             for a in analyses
         ]
     }
+
+
+# ---------- successor selection ----------
+
+
+@authed.post("/handoffs/{handoff_id}/study-opened")
+def study_opened(
+    handoff_id: str, session: Session = Depends(tx), user: AppUser = Depends(current_user)
+) -> dict:
+    """A candidate records opening the study material. Only the first call sets the time."""
+    h = _get(session, Handoff, handoff_id, "handoff")
+    if user.role == "admin":
+        raise AppError(403, "not_candidate", "only a candidate of a selecting handoff may do this")
+    c = Sel.open_study(session, h, user.person_id)
+    return {"handoff_id": str(h.id), "alias": c.alias, "study_opened_at": c.study_opened_at}
+
+
+@authed.get("/handoffs/{handoff_id}/readiness", dependencies=[Depends(require_admin)])
+def get_readiness(handoff_id: str, session: Session = Depends(tx)) -> dict:
+    return Sel.readiness(session, _get(session, Handoff, handoff_id, "handoff"))
+
+
+class SelectionIn(BaseModel):
+    selected_person_id: str
+    reason: str | None = None
+
+
+@authed.post("/handoffs/{handoff_id}/selection", status_code=201)
+def select_successor(
+    handoff_id: str,
+    body: SelectionIn,
+    session: Session = Depends(tx),
+    user: AppUser = Depends(require_admin),
+) -> dict:
+    h = _get(session, Handoff, handoff_id, "handoff")
+    sel = Sel.select_successor(session, h, body.selected_person_id, body.reason, actor_label(user))
+    return Sel.decision_out(sel) | {"handoff": S.handoff_out(h, "admin")}
+
+
+@authed.get("/handoffs/{handoff_id}/suitability", dependencies=[Depends(require_admin)])
+def get_suitability(handoff_id: str, session: Session = Depends(tx)) -> dict:
+    return Sel.suitability(session, _get(session, Handoff, handoff_id, "handoff"))
+
+
+class AssignIn(BaseModel):
+    successor_id: str
+
+
+@authed.post("/handoffs/{handoff_id}/assign")
+def assign_successor(
+    handoff_id: str,
+    body: AssignIn,
+    session: Session = Depends(tx),
+    user: AppUser = Depends(require_admin),
+) -> dict:
+    """An unassigned handoff gets its successor directly, without an assessment."""
+    h = _get(session, Handoff, handoff_id, "handoff")
+    if body.successor_id == h.expert_id:
+        raise AppError(422, "same_person", "expert and successor must differ")
+    _participant(session, body.successor_id, "successor")
+    Sel.assign_directly(session, h, body.successor_id, actor_label(user))
+    return S.handoff_out(h, "admin")
+
+
+class AssessmentIn(BaseModel):
+    candidate_ids: list[str]
+    exercise_id: str
+    due_at: datetime
+
+
+@authed.post("/handoffs/{handoff_id}/assessment", status_code=201)
+def start_assessment(
+    handoff_id: str,
+    body: AssessmentIn,
+    session: Session = Depends(tx),
+    user: AppUser = Depends(require_admin),
+) -> dict:
+    """2-4 candidates answer the same released exercise of this handoff, once, by due_at."""
+    h = _get(session, Handoff, handoff_id, "handoff")
+    _pool_shape(h.expert_id, body.candidate_ids)
+    for pid in body.candidate_ids:
+        _participant(session, pid, "candidate")
+    exercise = _get(session, Exercise, body.exercise_id, "exercise")
+    version, finding, owner = V.exercise_context(session, exercise)
+    if owner.id != h.id:
+        raise AppError(422, "exercise_not_in_handoff", "the exercise belongs to another handoff")
+    V.require_live(session, version, finding)
+    Sel.start_assessment(
+        session,
+        h,
+        body.candidate_ids,
+        exercise,
+        body.due_at,
+        get_settings().candidate_alias_seed,
+        actor_label(user),
+    )
+    return S.handoff_out(h, "admin")
 
 
 class AnalysisIn(BaseModel):
@@ -392,6 +542,51 @@ def get_okf(version_id: str, session: Session = Depends(tx)) -> PlainTextRespons
     )
 
 
+# ---------- help assistant ----------
+
+
+class AskIn(BaseModel):
+    """Who is asking comes from the session; any role or actor field sent here is ignored."""
+
+    question: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+    page: str = Field(default="", max_length=200)
+    handoff_id: str | None = Field(default=None, max_length=64)
+
+
+@authed.post("/assistant/ask")
+def ask_assistant(
+    body: AskIn, session: Session = Depends(tx), user: AppUser = Depends(current_user)
+) -> dict:
+    """Answers from the help guide or approved knowledge. Nothing is stored or audited."""
+    return assistant.answer(session, user, body.question, body.page, body.handoff_id)
+
+
+# ---------- learning coach ----------
+
+
+@authed.get("/attempts/{attempt_id}/coach")
+def get_coach(
+    attempt_id: str, session: Session = Depends(tx), user: AppUser = Depends(current_user)
+) -> dict:
+    """The owner's coach for an assessed attempt. Writes one coach.opened audit event, once."""
+    return coach.coach_for_attempt(session, user, attempt_id)
+
+
+class PracticeIn(BaseModel):
+    """Who is practising comes from the session; the token names the attempt and line."""
+
+    practice_id: str = Field(min_length=1, max_length=400)
+    answer: str = Field(min_length=1, max_length=1000)
+
+
+@authed.post("/coach/practice")
+def check_practice(
+    body: PracticeIn, session: Session = Depends(tx), user: AppUser = Depends(current_user)
+) -> dict:
+    """Checks a practice answer. Not an attempt: nothing is stored, logged or audited."""
+    return coach.check_practice(session, user, body.practice_id, body.answer)
+
+
 # ---------- demo ----------
 
 
@@ -404,9 +599,10 @@ def reset_demo(session: Session = Depends(tx)) -> dict:
     """
     session.execute(
         text(
-            "truncate audit_event, operation, attempt, exercise, knowledge_version, "
-            "knowledge_draft, finding, analysis, handoff, evidence_chunk, evidence_item, "
-            "evidence_bundle restart identity cascade"
+            "truncate audit_event, operation, attempt_review, attempt, exercise, "
+            "knowledge_version, knowledge_draft, finding, analysis, successor_selection, "
+            "handoff_candidate, handoff, evidence_chunk, evidence_item, evidence_bundle "
+            "restart identity cascade"
         )
     )
     bundle = import_bundle(session, get_settings().fixtures_input_dir)
