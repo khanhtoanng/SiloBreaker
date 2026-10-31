@@ -172,6 +172,100 @@ describe("HelpAssistant", () => {
     expect(within(panel).getAllByRole("listitem")).toHaveLength(1); // only the first answer has rows
   });
 
+  it("shows an agent answer: the model's reply, the code-rendered items, then the agent label", async () => {
+    const agent: AssistantAnswer = {
+      mode: "data",
+      reply: "Có, có một handoff.",
+      answer: "1 handoff you can see, newest first:\nAlice → Bob · active",
+      citations: [{ kind: "page", id: "/admin/handoffs", title: "Alice → Bob", link: "/admin/handoffs" }],
+      sections: [
+        {
+          mode: "data",
+          answer: "1 handoff you can see, newest first:\nAlice → Bob · active",
+          citations: [{ kind: "page", id: "/admin/handoffs", title: "Alice → Bob", link: "/admin/handoffs" }],
+        },
+      ],
+      suggestions: ["What do I click next?"],
+      provider: "local",
+      tools_used: ["list_handoffs", "my_pending"],
+    };
+    vi.spyOn(api, "ask").mockResolvedValue(agent);
+    renderAt("/admin");
+    const panel = await openPanel();
+    await userEvent.type(within(panel).getByRole("textbox", { name: "Your question" }), "Any handoffs?{Enter}");
+
+    const reply = await within(panel).findByText("Có, có một handoff.");
+    const row = within(panel).getByRole("link", { name: "Alice → Bob · active" });
+    expect(row).toHaveAttribute("href", "/admin/handoffs");
+    const label = within(panel).getByText("AI agent (local model) · tools: list_handoffs, my_pending");
+    expect(reply.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(panel).queryByText("Offline answer")).not.toBeInTheDocument();
+  });
+
+  it("renders each section of a mixed agent answer the way that kind is rendered offline", async () => {
+    vi.spyOn(api, "ask").mockResolvedValue({
+      mode: "data",
+      reply: "Both.",
+      answer: "unused by the panel",
+      citations: [],
+      sections: [
+        {
+          mode: "data",
+          answer: "Waiting for you:\nAlice → Bob: run the analysis",
+          citations: [{ kind: "page", id: "/admin/handoffs", title: "Alice → Bob", link: "/admin/handoffs" }],
+        },
+        {
+          mode: "knowledge",
+          answer: 'From the approved knowledge "Settlement recovery" v1:\nSteps:\n- Check the state',
+          citations: [{ kind: "knowledge_version", id: "v1", title: "Settlement recovery", version_no: 1, link: "/library?open=v1" }],
+        },
+      ],
+      suggestions: [],
+      provider: "local",
+      tools_used: ["my_pending", "search_knowledge"],
+    });
+    renderAt("/admin");
+    const panel = await openPanel();
+    await userEvent.type(within(panel).getByRole("textbox"), "x{Enter}");
+    expect(await within(panel).findByRole("link", { name: "Alice → Bob: run the analysis" })).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: "Knowledge: Settlement recovery v1" })).toHaveAttribute("href", "/library?open=v1");
+    expect(panel).not.toHaveTextContent("unused by the panel");
+  });
+
+  it("labels a locked agent answer without any model text", async () => {
+    vi.spyOn(api, "ask").mockResolvedValue({
+      ...locked,
+      reply: null,
+      sections: [],
+      provider: "local",
+      tools_used: ["search_knowledge"],
+    });
+    renderAt("/learn");
+    const panel = await openPanel();
+    await userEvent.type(within(panel).getByRole("textbox"), "x{Enter}");
+    expect(await within(panel).findByRole("status")).toHaveClass("assistant-locked");
+    expect(within(panel).getByText("AI agent (local model) · tools: search_knowledge")).toBeInTheDocument();
+  });
+
+  it("labels a fallback answer as offline, and a plain offline answer not at all", async () => {
+    const ask = vi.spyOn(api, "ask").mockResolvedValue({ ...knowledge, provider: "offline_fallback" });
+    renderAt("/library");
+    const panel = await openPanel();
+    const box = within(panel).getByRole("textbox");
+    await userEvent.type(box, "When do I escalate?{Enter}");
+    expect(await within(panel).findByText("Offline answer")).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: "Knowledge: Settlement recovery v1" })).toBeInTheDocument();
+    expect(panel).toHaveTextContent("Check the provider transaction state");
+
+    await userEvent.click(within(panel).getByRole("button", { name: "Clear" }));
+    ask.mockResolvedValue(knowledge);
+    await userEvent.type(box, "When do I escalate?{Enter}");
+    await within(panel).findByRole("link", { name: "Knowledge: Settlement recovery v1" });
+    expect(within(panel).queryByText("Offline answer")).not.toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("AI agent");
+  });
+
   it("sends a handoff id only on handoff routes", () => {
     expect(handoffIdOf("/admin/handoffs/abc")).toBe("abc");
     expect(handoffIdOf("/expert/handoffs/abc/detect")).toBe("abc");

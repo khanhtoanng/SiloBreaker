@@ -391,12 +391,20 @@ export type AssistantCitation = {
   link?: string;
 };
 
-export type AssistantAnswer = {
+// One block of code-rendered tool items in an agent answer.
+export type AssistantSection = {
   mode: AssistantMode;
   answer: string;
   citations: AssistantCitation[];
+};
+
+export type AssistantAnswer = AssistantSection & {
   suggestions: string[];
-  provider: "offline" | "openai" | "offline_fallback";
+  provider: "offline" | "openai" | "offline_fallback" | "local";
+  // Agent answers only: the model's own words, and the items rendered by code below them.
+  reply?: string | null;
+  sections?: AssistantSection[];
+  tools_used?: string[];
 };
 
 // Learning coach. Only the attempt's owner gets it; it never carries a criterion's critical

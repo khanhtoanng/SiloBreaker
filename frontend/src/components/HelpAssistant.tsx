@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { api, describeError } from "../api";
-import type { AssistantAnswer, AssistantCitation } from "../types";
+import type { AssistantAnswer, AssistantCitation, AssistantSection } from "../types";
 
 type Message = { id: number; question: string; reply?: AssistantAnswer; error?: string };
 
@@ -44,7 +44,7 @@ function CitationChip({ c }: { c: AssistantCitation }) {
 
 /** A live-data answer: a heading line, then one row per line, each linking to the page the
  *  signed-in user may open for it. Every row and link comes from the backend. */
-function DataAnswer({ reply }: { reply: AssistantAnswer }) {
+function DataAnswer({ reply }: { reply: AssistantSection }) {
   const [heading, ...rows] = reply.answer.split("\n");
   const paired = rows.length > 0 && rows.length === reply.citations.length;
   return (
@@ -64,6 +64,30 @@ function DataAnswer({ reply }: { reply: AssistantAnswer }) {
       )}
     </>
   );
+}
+
+/** A data answer's rows, or an answer's text with its source chips. */
+function AnswerBody({ part }: { part: AssistantSection }) {
+  if (part.mode === "data") return <DataAnswer reply={part} />;
+  return (
+    <>
+      <p>{part.answer}</p>
+      {part.citations.length > 0 && (
+        <div className="row wrap gap-s" aria-label="Sources">
+          {part.citations.map((c) => (
+            <CitationChip key={`${c.kind}:${c.id}`} c={c} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Who answered, when that is not the plain offline assistant. */
+function providerLabel(reply: AssistantAnswer): string | null {
+  if (reply.provider === "local") return `AI agent (local model) · tools: ${(reply.tools_used ?? []).join(", ")}`;
+  if (reply.provider === "offline_fallback") return "Offline answer";
+  return null;
 }
 
 /** Answers only from the help guide and approved knowledge. History lives in this
@@ -155,16 +179,13 @@ export default function HelpAssistant() {
                     </p>
                   ) : (
                     <div className={`assistant-answer mode-${m.reply.mode}`}>
-                      {m.reply.mode === "data" ? <DataAnswer reply={m.reply} /> : <p>{m.reply.answer}</p>}
-                      {m.reply.mode !== "data" && m.reply.citations.length > 0 && (
-                        <div className="row wrap gap-s" aria-label="Sources">
-                          {m.reply.citations.map((c) => (
-                            <CitationChip key={`${c.kind}:${c.id}`} c={c} />
-                          ))}
-                        </div>
-                      )}
+                      {m.reply.reply && <p className="assistant-reply">{m.reply.reply}</p>}
+                      {(m.reply.sections ?? [m.reply]).map((part, i) => (
+                        <AnswerBody key={i} part={part} />
+                      ))}
                     </div>
                   ))}
+                {m.reply && providerLabel(m.reply) && <p className="assistant-data-label small">{providerLabel(m.reply)}</p>}
               </div>
             ))}
             {busy && (
