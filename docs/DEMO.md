@@ -159,6 +159,34 @@ is checked instantly but never stored or counted, so it cannot change a result, 
 selection. Only the learner who answered can open it; the admin's audit log shows one
 `coach.opened` per attempt, with no text.
 
+## 9. Optional: Help Assistant as an agent on a local model (≈ 2 min)
+
+Needs a local model server; the README section *AI agent (local model)* has the setup. Everything
+above stays offline and is unaffected, including every number. Restart the backend with:
+
+```bash
+SB_ASSISTANT_PROVIDER=local SB_ASSISTANT_MODEL=<id from GET /v1/models> uvicorn app.main:app --port 8000
+```
+
+Play it after step 5.4, with Alice's knowledge approved and the common assessment open: Alice is the
+expert, and Carol is a candidate who has not answered yet. A model's wording varies; the rows under
+it do not.
+
+| # | Do | You see |
+|---|---|---|
+| 9.1 | As `admin`, **Help** → *Có handoff nào không?* | A short reply in Vietnamese. Under it *Live data · only what you can see* and the row *Alice → successor not chosen · choosing a successor*, linked to **Handoffs**, then *AI agent (local model) · tools: list_handoffs*. |
+| 9.2 | As `admin`, ask *Tôi cần làm gì tiếp?* | A reply in Vietnamese with what is waiting. If nothing is, the line *Nothing is waiting for you.* |
+| 9.3 | As `alice`, ask both questions. | Only her handoff, linked to the Detect page; what is waiting for her as the expert, with no candidate's name. |
+| 9.4 | As `carol`, ask both questions. | Only the handoff she is a candidate in, linked to **Learning**, and *Answer the exercise “Settlement recovery” …, due …*. No other candidate, alias or score. |
+| 9.5 | As `carol`, ask *Tôi nên kiểm tra gì trước khi thử lại settlement?* | The grey paused notice, with no model text: she has an exercise to complete. |
+| 9.6 | Quit the model server and ask *Có handoff nào không?* again. | The offline answer with the label *Offline answer*. The offline matcher does not understand this Vietnamese question, so it may not be useful; it never invents one. |
+
+**Why it matters:** the model chooses which read-only tool to call, in the user's language, but it
+cannot name a user: code runs each tool as the signed-in person. The rows, links and statuses come
+from the database, not from the model's sentence, and the lock is inside the tool, so no wording
+opens it. If the model fails, the assistant says so and answers offline; it is never counted against
+the learner.
+
 ---
 
 ## Answers to copy

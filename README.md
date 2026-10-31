@@ -24,6 +24,7 @@ Human approval is the boundary between system interpretation and approved knowle
 | Successor selection: choose later, Suitability (fit), common assessment, Results (score, top, tie), admin decision, expert review; browser e2e (`e2e/selection_flow.py`) | Done |
 | Help Assistant: role-scoped help and cited answers from approved knowledge, live data under the app's visibility rules, assessment lock, offline by default | Done |
 | Learning Coach: after an assessed attempt, the approved line behind each missed criterion and uncounted practice, owner only, offline by default | Done |
+| Help Assistant agent on a local model (`SB_ASSISTANT_PROVIDER=local`): the model picks read-only tools, code runs them, checks citations and renders the facts; offline stays the default | Done; live-tested with the Llama app and Gemma 4 E4B on one machine, not with Ollama |
 | Production hardening: HTTPS (`SB_SESSION_COOKIE_SECURE=true`), login rate limiting, password policy beyond length | Not done |
 
 ## Quick start / Chạy nhanh
@@ -57,7 +58,7 @@ Optional dependency groups in `backend/pyproject.toml`:
 |---|---|---|
 | `dev` | pytest, httpx, ruff | always for development |
 | `e2e` | playwright | `pip install -e ".[dev,e2e]" && playwright install chromium` |
-| `ai` | openai | only when `SB_AI_PROVIDER=openai`; offline mode never imports it |
+| `ai` | openai | only when `SB_AI_PROVIDER=openai` or `SB_ASSISTANT_PROVIDER=local`; offline mode never imports it |
 
 Without Docker, use a local PostgreSQL (user/password `postgres/postgres`), create the
 `silobreaker` database and run `scripts/create-test-db.sql`.
@@ -99,9 +100,10 @@ and never seed them in a real deployment.
 ## Tests
 
 ```bash
-cd backend && pytest -q          # 226 tests against PostgreSQL (silobreaker_test)
+cd backend && pytest -q          # 274 tests against PostgreSQL (silobreaker_test), 2 more skipped unless SB_ASSISTANT_LIVE=1
 cd backend && ruff check app tests && ruff format --check app tests
-cd frontend && npm test          # 55 Vitest tests (jsdom)
+# Optional, needs a local model server: SB_ASSISTANT_LIVE=1 SB_ASSISTANT_MODEL=<id> pytest -q -m local_model
+cd frontend && npm test          # 59 Vitest tests (jsdom)
 cd frontend && npm run build     # type-check + build
 pip install -e "backend[e2e]" && playwright install chromium
 python e2e/demo_flow.py --runs 3 # admin -> expert -> successor (+ Help Assistant, Learning Coach) -> audit; API (seeded) and dev server running
@@ -262,7 +264,8 @@ knowledge ranking. `live_data.py` answers, starting from `visible_handoffs` in
 Non-admins never see other people's scores, fit, verdicts, answers, attempt counts or aliases;
 nobody sees rubrics, drafts, evidence text, the audit log or passwords. Data answers never call a
 model (`provider` is always `"offline"`, even with `SB_AI_PROVIDER=openai`), never unlock
-knowledge answers, and are not stored or audited. *What is waiting for me?* is suggested first
+knowledge answers, and are not stored or audited. (This describes the offline path; for the
+optional local agent see below.) *What is waiting for me?* is suggested first
 on every home page (`/`, `/admin`, `/expert`, `/learn`). Conflicts between the brief and the code
 are in [`docs/ASSISTANT_LIVE_DATA_PREWORK.md`](docs/ASSISTANT_LIVE_DATA_PREWORK.md).
 
@@ -289,6 +292,82 @@ model.
 
 **No storage.** No table and no migration: chat history lives in React state and is gone on
 reload. Questions are not written to the audit log, the database or the logs.
+
+### AI agent (local model)
+
+Optional. The Help Assistant can run as an agent on a model on your own machine, so questions may
+be phrased freely, in English or Vietnamese. The model proposes, code decides: the model chooses
+which read-only tool to call, and code runs the tool, enforces permissions and renders every fact
+in the items the user sees. The model never writes SQL and never reaches the database, files or
+network. **Offline stays the default**, and **detection, exercise generation and assessment are
+unaffected**: they follow `SB_AI_PROVIDER`, so the demo numbers (88, 100/86/21) do not change.
+
+**Setup with the Llama app** ([llama.app](https://llama.app), OpenAI-compatible API on port 9931):
+
+1. Install it. Windows 11 and macOS: download the app. macOS also `brew install --cask llama-app`;
+   Windows command line `irm https://llama.app/install.ps1 | iex`; Linux (command line only)
+   `curl -LsSf https://llama.app/install.sh | sh`.
+2. In the app, choose a model that supports tool calling from the recommended list or **Browse
+   models**, and wait until the download has finished. A model that is still downloading is
+   already listed, but the server refuses to run it, so the assistant falls back.
+3. Find its exact id: `curl http://localhost:9931/v1/models`.
+4. `pip install -e ".[ai]"` and start the backend with the settings below.
+
+**Ollama** or another OpenAI-compatible server works by changing the settings only, for example
+`SB_ASSISTANT_BASE_URL=http://localhost:11434/v1`. No server-specific API is used.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `SB_ASSISTANT_PROVIDER` | `offline` | `local` turns the agent on |
+| `SB_ASSISTANT_BASE_URL` | `http://localhost:9931/v1` | The server (Llama) |
+| `SB_ASSISTANT_MODEL` | none | Required with `local`: the exact id at `GET {base_url}/models`. Missing or not listed: a WARNING says so, and the answer is offline |
+| `SB_ASSISTANT_API_KEY` | `local` | Dummy value; local servers ignore it |
+| `SB_ASSISTANT_MAX_TOOL_CALLS` | `4` | Tool calls per question, in total |
+| `SB_ASSISTANT_TIMEOUT_SECONDS` | `60` | Whole run, across all model calls |
+
+**Tools** (`backend/app/assistant/tools.py`), exactly these, all read-only:
+
+| Tool | Arguments | Runs |
+|---|---|---|
+| `list_handoffs` | none | `live_data.list_handoffs` |
+| `handoff_status` | `handoff_ref?` (an id or *expert→successor* label from a previous result) | `live_data.handoff_status`, filtered to that handoff |
+| `my_pending` | none | `live_data.my_pending` |
+| `my_due` | none | `live_data.my_due` |
+| `search_knowledge` | `query` (≤200) | `retrieval.rank_knowledge` over the versions `/library` lists; `locked` during the assessment lock |
+| `help_topics` | `query` (≤200) | `retrieval.rank_topics` for the user's roles and page |
+
+- No tool takes a user, role, person or actor: the executor binds the session user and page, and
+  extra arguments or an unknown tool name are rejected.
+- Tools reuse the v1.5 functions and `visible_handoffs`, so they show only what the app already
+  shows that user. A handoff the user cannot see is `not found`, never `forbidden`. No tool returns
+  rubrics, criteria, drafts, other people's answers, scores, fit, aliases, evidence, the audit log
+  or account data.
+- The assessment lock is enforced inside `search_knowledge`; no prompt wording can reach it.
+
+**Validation** (`backend/app/assistant/agent.py`, prompt `assistant-agent/1`). The model gets the
+system prompt and the question, no history. Its final reply must cite the ids of the items it used
+as `[id]`. Code rejects the reply if a cited id was not returned in this run, if it cites nothing
+although tools returned items, if no tool was called at all, or if it is a tool call written as
+text (never parsed into a call). What the user sees:
+
+- the model's short reply with the citations removed, then
+- the cited items, rendered by code in the v1.5 format with page links and knowledge citations, so
+  names, statuses, due dates and knowledge lines come from the database, then
+- the label *AI agent (local model) · tools: list_handoffs, my_pending*.
+
+The reply itself is the model's wording: code checks that its citations exist, not that the
+sentence is true. If the rendered item differs from the reply, the item is right. While the lock
+holds and nothing else is cited, no model text is shown at all.
+
+`mode` is `data`, `knowledge` or `help` by what was cited (in that order), `locked`, else `unknown`.
+Agent answers have `provider: "local"` and add `reply`, `sections` and `tools_used`.
+
+**Fallback.** If the server is unreachable or times out, the model is missing or not listed, the
+response or tool call is invalid, the limits are exceeded or the reply is rejected, the v1.5 offline
+answer is returned unchanged with `provider: "offline_fallback"` and the label *Offline answer*. The
+reason is logged at WARNING, without the question. The fallback never calls `SB_AI_PROVIDER`'s
+model. Nothing is stored. Findings from testing against a real server are in
+[`docs/ASSISTANT_AGENT_PREWORK.md`](docs/ASSISTANT_AGENT_PREWORK.md).
 
 ## Learning Coach
 
@@ -346,7 +425,7 @@ backend/
   app/analysis/    extraction contract, citation validation, offline extractor, Detect flow
   app/scoring/     deterministic signals, gates, caps, confidence (pure functions)
   app/knowledge/   review, drafts, approval, immutable versions, OKF renderer
-  app/assistant/   help assistant: curated topics, lexical retrieval, assessment lock
+  app/assistant/   help assistant: curated topics, lexical retrieval, assessment lock, local-model agent and its tools
   app/auth/        password hashing, server-side sessions, login/logout, authorization dependencies
   app/api/         FastAPI routes (including admin users/audit, library, my exercises)
   app/seed_users.py  demo accounts (python -m app.seed_users)

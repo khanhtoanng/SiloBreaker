@@ -219,6 +219,23 @@ def answer(
     page: str,
     handoff_id: str | None = None,
 ) -> dict:
+    if get_settings().assistant_provider == "local":
+        from app.assistant.agent import run_agent
+
+        return run_agent(session, user, question, page, handoff_id)
+    return offline_answer(session, user, question, page, handoff_id)
+
+
+def offline_answer(
+    session: Session,
+    user: AppUser,
+    question: str,
+    page: str,
+    handoff_id: str | None = None,
+    allow_model: bool = True,
+) -> dict:
+    """The lexical assistant. allow_model=False is the agent's fallback: a question meant for
+    a local model must not move to SB_AI_PROVIDER's remote one because the local one failed."""
     roles = role_context(session, user, handoff_id)
     page = page if page.startswith("/") else ""
     # Live data first, but only for a question that clearly asks for it. No model is called
@@ -238,7 +255,7 @@ def answer(
     if is_knowledge:
         assert hit is not None
         provider, text = "offline", None
-        if get_settings().ai_provider == "openai":
+        if allow_model and get_settings().ai_provider == "openai":
             text = model_answer(question, hit)
             provider = "openai" if text is not None else "offline_fallback"
         return _out(
